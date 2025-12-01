@@ -1,19 +1,31 @@
-# Project Structure
+# Project Structure (v1)
 
-Complete directory layout and file responsibilities for Squirrel.
+Complete directory layout and file responsibilities for Squirrel v1 architecture.
+
+## v1 Architecture Components
+
+```
+RUST DAEMON                           PYTHON MEMORY SERVICE
+├── Log watcher (4 CLIs)              ├── Router Agent (dual-mode)
+├── SQLite + sqlite-vec storage       │   ├── INGEST: events → memories
+├── MCP server (2 tools)              │   └── ROUTE: task → relevant memories
+├── CLI (sqrl commands)               ├── ONNX embeddings (384-dim)
+└── IPC client                        ├── Retrieval + "why" generation
+         ↕ Unix socket IPC            └── IPC server
+```
 
 ## Root Layout
 
 ```
 Squirrel/
-├── agent/                  # Rust module
-├── memory_service/         # Python module
+├── agent/                  # Rust daemon + CLI + MCP
+├── memory_service/         # Python Router Agent + embeddings
 ├── docs/                   # Documentation
+├── reference/              # Competitor analysis (gitignored clones)
 ├── .claude/                # Claude Code config
 ├── .cursorrules            # Cursor config
 ├── AGENTS.md               # Codex CLI config
 ├── GEMINI.md               # Gemini CLI config
-├── CONTRIBUTING.md         # Contributor guide
 ├── LICENSE                 # AGPL-3.0
 └── README.md               # Main documentation
 ```
@@ -22,77 +34,70 @@ Squirrel/
 
 ```
 agent/
-├── Cargo.toml              # Rust dependencies
+├── Cargo.toml              # Dependencies: tokio, rusqlite, sqlite-vec, notify, clap
 ├── Cargo.lock
 ├── src/
-│   ├── main.rs             # Entry point: routes to daemon/mcp/cli
-│   ├── lib.rs              # Shared library code
+│   ├── main.rs             # Entry point: CLI command router
+│   ├── lib.rs              # Shared library exports
 │   │
-│   ├── daemon.rs           # Global daemon process
-│   │   ├── DaemonServer    # TCP server for IPC
-│   │   ├── spawn_python()  # Launch Python subprocess
-│   │   ├── watch_repos()   # Monitor registered repos
-│   │   └── health_check()  # Keep Python alive
+│   ├── daemon.rs           # Daemon process management
+│   │   ├── Daemon struct   # Main daemon state
+│   │   ├── start()         # Spawn watchers + Python service
+│   │   ├── stop()          # Graceful shutdown
+│   │   └── batch_loop()    # Events → Episodes → IPC
 │   │
-│   ├── watcher.rs          # File system monitoring
-│   │   ├── ClaudeWatcher   # Watch ~/.claude/projects/**/*.jsonl
-│   │   ├── parse_jsonl()   # JSONL → Event
-│   │   └── handle_change() # Notify daemon on new events
+│   ├── watcher.rs          # Multi-CLI log watching
+│   │   ├── LogWatcher      # Watch log directories
+│   │   ├── ClaudeParser    # ~/.claude/projects/**/*.jsonl
+│   │   ├── CodexParser     # ~/.codex-cli/logs/**/*.jsonl
+│   │   ├── GeminiParser    # ~/.gemini/logs/**/*.jsonl
+│   │   ├── CursorParser    # ~/.cursor-tutor/logs/**/*.jsonl
+│   │   └── parse_line()    # JSONL → Event
 │   │
-│   ├── events.rs           # Event data model
-│   │   ├── Event struct    # Core event type
-│   │   ├── SourceTool enum # claude_code, cursor, git, ...
-│   │   ├── EventType enum  # chat, code_change, commit, ...
-│   │   ├── compute_hash()  # Deduplication hash
-│   │   ├── EventStore      # SQLite operations
-│   │   └── batch_unsent()  # Get events to send to Python
+│   ├── events.rs           # Event and Episode models
+│   │   ├── Event struct    # {id, cli, repo, event_type, content, timestamp}
+│   │   ├── Episode struct  # {id, repo, cli, event_ids, start_ts, end_ts}
+│   │   ├── CLI enum        # claude_code, codex, cursor, gemini
+│   │   ├── compute_hash()  # Deduplication
+│   │   └── group_episodes() # Same repo + CLI + time gap < 20min
 │   │
-│   ├── storage.rs          # SQLite database layer
-│   │   ├── init_user_db()  # ~/.sqrl/user.db schema
-│   │   ├── init_project_db() # <repo>/.ctx/data.db schema
-│   │   ├── get_connection() # Connection pooling
-│   │   └── migrations/      # Schema versioning
+│   ├── storage.rs          # SQLite + sqlite-vec
+│   │   ├── init_global_db()   # ~/.sqrl/squirrel.db
+│   │   ├── init_project_db()  # <repo>/.sqrl/squirrel.db
+│   │   ├── save_events()
+│   │   ├── save_episodes()
+│   │   ├── save_memory()      # With embedding blob
+│   │   ├── query_memories()   # Via sqlite-vec
+│   │   └── SCHEMA            # memories, events, episodes tables
 │   │
-│   ├── mcp.rs              # MCP stdio server
+│   ├── ipc.rs              # Unix socket client to Python
+│   │   ├── IpcClient       # Connect to /tmp/sqrl_router.sock
+│   │   ├── router_agent()  # Call INGEST or ROUTE mode
+│   │   └── fetch_memories() # Get memories for MCP tools
+│   │
+│   ├── mcp.rs              # MCP stdio server (2 tools)
 │   │   ├── McpServer       # MCP protocol handler
-│   │   ├── handle_tool_call() # Route to tool handlers
-│   │   ├── get_user_style_view_tool()
-│   │   ├── get_project_brief_view_tool()
-│   │   └── connect_daemon() # TCP to daemon for data
-│   │
-│   ├── python_client.rs    # HTTP client to Python service
-│   │   ├── PythonClient    # HTTP client wrapper
-│   │   ├── process_events() # POST /process_events
-│   │   ├── get_user_style_view() # GET /views/user_style
-│   │   ├── get_project_brief_view() # GET /views/project_brief
-│   │   └── retry_logic()   # Exponential backoff
-│   │
-│   ├── views.rs            # View caching
-│   │   ├── ViewCache       # Manage <repo>/.ctx/views/
-│   │   ├── is_stale()      # Check .meta.json
-│   │   ├── read_cache()    # Read cached view
-│   │   ├── write_cache()   # Update cache + meta
-│   │   └── ViewMeta struct # Staleness metadata
+│   │   ├── squirrel_get_task_context()  # Primary tool
+│   │   ├── squirrel_search_memory()     # Search tool
+│   │   └── run_stdio()     # Blocks on stdin/stdout
 │   │
 │   ├── cli.rs              # CLI commands
-│   │   ├── cmd_init()      # sqrl init
-│   │   ├── cmd_config()    # sqrl config
-│   │   ├── cmd_status()    # sqrl status
-│   │   ├── cmd_daemon_start() # sqrl daemon start
-│   │   ├── cmd_daemon_stop()  # sqrl daemon stop
-│   │   └── auto_config_mcp()  # Patch MCP configs
+│   │   ├── cmd_init()      # Create .sqrl/, register project
+│   │   ├── cmd_config()    # Set user_id, API keys
+│   │   ├── cmd_daemon()    # start/stop/status
+│   │   ├── cmd_status()    # Show memory stats
+│   │   └── cmd_mcp()       # Run MCP server
 │   │
-│   ├── config.rs           # Configuration management
-│   │   ├── Config struct   # ~/.sqrl/config.toml
-│   │   ├── load_config()
+│   ├── config.rs           # Configuration
+│   │   ├── Config struct   # {user_id, api_key, socket_path}
+│   │   ├── load_config()   # From ~/.sqrl/config.toml
 │   │   ├── save_config()
-│   │   └── get_api_key()   # Read user's LLM API keys
+│   │   └── get_projects()  # Registered repos
 │   │
-│   └── utils.rs            # Shared utilities
+│   └── utils.rs            # Path helpers
 │       ├── get_sqrl_dir()  # ~/.sqrl/
-│       ├── get_ctx_dir()   # <repo>/.ctx/
-│       ├── find_repo_root() # Walk up to .git/
-│       └── ensure_dir()    # Create dir if missing
+│       ├── get_project_sqrl_dir() # <repo>/.sqrl/
+│       └── find_repo_root() # Walk up to .git/
 │
 └── tests/
     ├── integration/
@@ -101,257 +106,253 @@ agent/
     │   └── mcp_test.rs
     └── unit/
         ├── events_test.rs
-        └── storage_test.rs
+        ├── storage_test.rs
+        └── ipc_test.rs
 ```
 
-## Python Memory Service Module (`memory_service/`)
+## Python Memory Service (`memory_service/`)
 
 ```
 memory_service/
-├── pyproject.toml          # Python dependencies (uv/pip)
-├── README.md               # Python module docs
+├── pyproject.toml          # Dependencies: onnxruntime, anthropic, pydantic
+├── README.md
+├── models/                 # ONNX model files
+│   └── all-MiniLM-L6-v2.onnx  # 25MB, 384-dim embeddings
+│
 ├── squirrel_memory/
-│   ├── __init__.py         # Package init
+│   ├── __init__.py
 │   │
-│   ├── server.py           # FastAPI application
-│   │   ├── app = FastAPI()
-│   │   ├── POST /process_events
-│   │   ├── GET /views/user_style
-│   │   ├── GET /views/project_brief
-│   │   └── startup/shutdown hooks
+│   ├── server.py           # Unix socket IPC server
+│   │   ├── start_server()  # Listen on /tmp/sqrl_router.sock
+│   │   ├── handle_request() # Route to router_agent or fetch_memories
+│   │   └── read_write_json() # JSON-RPC style protocol
 │   │
-│   ├── models.py           # Pydantic data models
-│   │   ├── Event           # Input from Rust
-│   │   ├── Episode         # Grouped events
-│   │   ├── MemoryItem      # Extracted memory
-│   │   ├── UserStyleView   # Output view
-│   │   └── ProjectBriefView # Output view
+│   ├── router_agent.py     # Dual-mode Router Agent (core logic)
+│   │   ├── router_agent()  # Entry point
+│   │   ├── ingest_mode()   # Episode → ADD/UPDATE/NOOP + memory
+│   │   │   └── "Is this a memorable pattern? What type?"
+│   │   ├── route_mode()    # Task + candidates → selected + why
+│   │   │   └── "Which memories are relevant? Why?"
+│   │   └── PROMPTS         # LLM prompts for both modes
 │   │
-│   ├── extractor.py        # Event → Memory extraction
-│   │   ├── Extractor class
-│   │   ├── group_episodes() # Time/session-based grouping
-│   │   ├── extract_user_style() # LLM call
-│   │   ├── extract_project_facts() # LLM call
-│   │   └── assign_importance() # Score 0.0-1.0
+│   ├── embeddings.py       # ONNX embedding model
+│   │   ├── EmbeddingModel  # Load all-MiniLM-L6-v2.onnx
+│   │   ├── embed()         # text → 384-dim vector
+│   │   └── batch_embed()   # Multiple texts
 │   │
-│   ├── updater.py          # Memory update logic
-│   │   ├── MemoryUpdater class
-│   │   ├── find_similar() # Key-based or semantic search
-│   │   ├── decide_action() # LLM: ADD/UPDATE/NOOP/DELETE
-│   │   ├── merge_items()  # Combine memory items
-│   │   └── apply_updates() # Write to DB
+│   ├── retrieval.py        # Memory retrieval
+│   │   ├── retrieve_candidates() # Query sqlite-vec
+│   │   └── generate_why()  # Heuristic templates for "why" explanations
 │   │
-│   ├── views.py            # View generation
-│   │   ├── ViewGenerator class
-│   │   ├── build_user_style_view() # Summarize user memory
-│   │   ├── build_project_brief_view() # Summarize project
-│   │   ├── select_memories() # Filter by importance/recency
-│   │   └── format_view()  # Compact token-efficient format
+│   ├── schemas/
+│   │   ├── __init__.py
+│   │   ├── memory.py       # Memory, Event, Episode models
+│   │   └── ipc.py          # RouterAgentRequest, FetchMemoriesRequest
 │   │
-│   ├── storage.py          # Database operations
-│   │   ├── get_db_connection() # SQLite connection
-│   │   ├── save_episodes()
-│   │   ├── save_memory_items()
-│   │   ├── query_memories() # Fetch for views
-│   │   └── init_schema()   # Create tables if missing
-│   │
-│   ├── llm.py              # LLM client wrapper
-│   │   ├── LLMClient class
-│   │   ├── call_openai()   # GPT-4 / GPT-4o
-│   │   ├── call_anthropic() # Claude 3.5
-│   │   ├── call_gemini()   # Gemini 2.0 Pro
-│   │   └── retry_with_backoff()
-│   │
-│   └── prompts.py          # LLM prompt templates
-│       ├── EXTRACT_USER_STYLE_PROMPT
-│       ├── EXTRACT_PROJECT_FACTS_PROMPT
-│       ├── UPDATE_DECISION_PROMPT
-│       └── VIEW_GENERATION_PROMPT
+│   └── llm.py              # LLM client wrapper
+│       ├── LLMClient       # Unified client
+│       ├── call_anthropic() # Claude API
+│       ├── call_openai()   # OpenAI API
+│       └── retry_backoff() # Error handling
 │
 └── tests/
-    ├── test_extractor.py
-    ├── test_updater.py
-    ├── test_views.py
+    ├── test_router_agent.py
+    ├── test_embeddings.py
+    ├── test_retrieval.py
     └── fixtures/
-        └── sample_events.json
+        └── sample_episodes.json
 ```
 
 ## Documentation (`docs/`)
 
 ```
 docs/
-├── ARCHITECTURE.md         # System design, component interaction
+├── ARCHITECTURE.md         # Full v1 technical design
 ├── PROJECT_STRUCTURE.md    # This file
-├── API.md                  # Python HTTP API specification
-├── MCP_TOOLS.md            # MCP tool documentation
-├── DATA_MODEL.md           # Event/Episode/Memory/View schemas
-├── DEVELOPMENT.md          # Setup, build, test instructions
-└── DEPLOYMENT.md           # Installation, distribution (future)
+├── DEVELOPMENT_PLAN.md     # Implementation roadmap
+└── EXAMPLE.md              # Process walkthrough (optional)
 ```
 
-## Configuration Files
+## Runtime Directories
 
 ```
-.claude/
-├── CLAUDE.md               # Team standards (read by Claude Code)
-└── settings.local.json     # Local settings (gitignored)
-
-.cursorrules                # Cursor configuration
-AGENTS.md                   # Codex CLI configuration
-GEMINI.md                   # Gemini CLI configuration
-```
-
-## Runtime Directories (Created by sqrl)
-
-```
-~/.sqrl/                    # User-scope data
+~/.sqrl/                    # Global user data
 ├── config.toml             # User settings
 │   ├── [user]
-│   │   └── id = "uuid"
+│   │   └── id = "alice"
 │   ├── [llm]
-│   │   ├── openai_api_key = "sk-..."
-│   │   ├── anthropic_api_key = "sk-ant-..."
-│   │   └── default_model = "gpt-4"
+│   │   └── anthropic_api_key = "sk-ant-..."
 │   └── [daemon]
-│       └── port = 9468
+│       └── socket_path = "/tmp/sqrl_router.sock"
 │
-├── user.db                 # SQLite: user-level memory
-│   └── Tables:
-│       ├── user_style_items
-│       └── sync_state
+├── squirrel.db             # Global SQLite (user_style memories)
+│   └── Tables: memories (user_style only)
 │
 ├── projects.json           # Registered repos
-│   └── {"projects": ["/path/to/repo1", "/path/to/repo2"]}
+│   └── ["/home/user/project1", "/home/user/project2"]
 │
-├── daemon.json             # Daemon connection info
-│   └── {"pid": 12345, "host": "127.0.0.1", "port": 9468}
-│
-└── memory-service.json     # Python service info
-    └── {"pid": 23456, "host": "127.0.0.1", "port": 8734}
+└── logs/                   # Daemon logs
+    └── daemon.log
 
-<repo>/.ctx/                # Project-scope data
-├── data.db                 # SQLite: events, episodes, memory
+<repo>/.sqrl/               # Per-project data
+├── squirrel.db             # Project SQLite
 │   └── Tables:
-│       ├── events
-│       ├── episodes
-│       ├── memory_items
-│       └── sync_state
+│       ├── memories        # project_fact, pitfall, recipe
+│       ├── events          # Raw log events
+│       └── episodes        # Grouped sessions
 │
-└── views/                  # Cached views
-    ├── user_style.json
-    ├── project_brief.json
-    └── .meta.json          # Staleness metadata
-        └── {
-              "user_style": {
-                "last_generated": "2025-11-23T10:30:00Z",
-                "events_count_at_generation": 1234,
-                "ttl_minutes": 10
-              }
-            }
+└── config.toml             # Project overrides (optional)
 ```
 
-## File Responsibilities Summary
+## IPC Protocol
 
-### Rust Agent
+```
+Transport: Unix domain socket
+Path: /tmp/sqrl_router.sock (Linux/macOS)
+      \\.\pipe\sqrl_router (Windows)
 
-| File | Responsibility | Key Functions |
-|------|---------------|---------------|
-| `daemon.rs` | Global process lifecycle | spawn_python, watch_repos, TCP server |
-| `watcher.rs` | File monitoring | parse JSONL, detect changes |
-| `events.rs` | Event data model | Event struct, hash, storage ops |
-| `storage.rs` | SQLite operations | init schemas, connections |
-| `mcp.rs` | MCP protocol | stdio server, tool handlers |
-| `python_client.rs` | HTTP to Python | POST/GET requests, retry |
-| `views.rs` | View caching | staleness check, read/write cache |
-| `cli.rs` | User commands | init, config, status, daemon |
-| `config.rs` | Settings management | load/save TOML, API keys |
-| `utils.rs` | Shared helpers | paths, dirs, repo detection |
+Protocol: JSON-RPC style
+
+Request:
+{
+  "method": "router_agent" | "fetch_memories",
+  "params": { ... },
+  "id": 123
+}
+
+Response:
+{
+  "result": { ... },
+  "id": 123
+}
+
+Methods:
+1. router_agent
+   params.mode: "ingest" | "route"
+   params.payload: mode-specific data
+
+2. fetch_memories
+   params.repo: string
+   params.task: string (optional)
+   params.memory_types: ["user_style", "project_fact", ...]
+   params.max_results: int
+```
+
+## File Responsibilities
+
+### Rust Daemon
+
+| File | Responsibility | Key APIs |
+|------|---------------|----------|
+| `daemon.rs` | Process lifecycle | start(), stop(), batch_loop() |
+| `watcher.rs` | Log file watching | LogWatcher, parse_line() |
+| `events.rs` | Event/Episode models | Event, Episode, group_episodes() |
+| `storage.rs` | SQLite + sqlite-vec | save_memory(), query_memories() |
+| `ipc.rs` | IPC to Python | router_agent(), fetch_memories() |
+| `mcp.rs` | MCP server (2 tools) | squirrel_get_task_context(), squirrel_search_memory() |
+| `cli.rs` | CLI commands | cmd_init(), cmd_daemon(), cmd_mcp() |
+| `config.rs` | Settings | load_config(), save_config() |
 
 ### Python Memory Service
 
-| File | Responsibility | Key Functions |
-|------|---------------|---------------|
-| `server.py` | HTTP endpoints | FastAPI routes |
-| `models.py` | Data schemas | Pydantic models |
-| `extractor.py` | Pattern extraction | group episodes, LLM extraction |
-| `updater.py` | Memory updates | find similar, ADD/UPDATE/NOOP |
-| `views.py` | View generation | build compact summaries |
-| `storage.py` | Database ops | save/query memory items |
-| `llm.py` | LLM client | call OpenAI/Anthropic/Gemini |
-| `prompts.py` | Prompt templates | extraction/update/view prompts |
+| File | Responsibility | Key APIs |
+|------|---------------|----------|
+| `server.py` | IPC server | start_server(), handle_request() |
+| `router_agent.py` | Dual-mode router | ingest_mode(), route_mode() |
+| `embeddings.py` | ONNX embeddings | embed(), batch_embed() |
+| `retrieval.py` | Memory search | retrieve_candidates(), generate_why() |
+| `llm.py` | LLM calls | call_anthropic(), call_openai() |
+
+## SQLite Schema
+
+```sql
+-- memories table (both global and project DBs)
+CREATE TABLE memories (
+  id TEXT PRIMARY KEY,
+  content_hash TEXT NOT NULL UNIQUE,
+  content TEXT NOT NULL,
+  memory_type TEXT NOT NULL,  -- user_style | project_fact | pitfall | recipe
+  repo TEXT NOT NULL,
+  embedding BLOB,             -- 384-dim float32 vector
+  confidence REAL NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+-- events table (project DB only)
+CREATE TABLE events (
+  id TEXT PRIMARY KEY,
+  cli TEXT NOT NULL,          -- claude_code | codex | cursor | gemini
+  repo TEXT NOT NULL,
+  event_type TEXT NOT NULL,   -- user_message | assistant_response | tool_use
+  content TEXT NOT NULL,
+  file_paths TEXT,            -- JSON array
+  timestamp TEXT NOT NULL,
+  processed INTEGER DEFAULT 0
+);
+
+-- episodes table (project DB only)
+CREATE TABLE episodes (
+  id TEXT PRIMARY KEY,
+  repo TEXT NOT NULL,
+  cli TEXT NOT NULL,
+  start_ts TEXT NOT NULL,
+  end_ts TEXT NOT NULL,
+  event_ids TEXT NOT NULL,    -- JSON array
+  processed INTEGER DEFAULT 0
+);
+```
 
 ## Development Workflow
 
-```
-1. Clone repo
-   git clone https://github.com/kaminoguo/Squirrel.git
-   cd Squirrel
+```bash
+# 1. Clone repo
+git clone https://github.com/kaminoguo/Squirrel.git
+cd Squirrel
 
-2. Build Rust module
-   cd agent
-   cargo build
+# 2. Build Rust daemon
+cd agent
+cargo build
 
-3. Install Python module
-   cd ../memory_service
-   pip install -e .
+# 3. Install Python service
+cd ../memory_service
+pip install -e .
 
-4. Run daemon (development mode)
-   cd ../agent
-   cargo run --bin sqrl daemon start
+# 4. Start daemon
+cd ../agent
+cargo run -- daemon start
 
-5. Initialize a project
-   cd ~/my-project
-   sqrl init
+# 5. Initialize a project
+cd ~/my-project
+sqrl init
 
-6. Configure MCP for Claude Code
-   # sqrl init auto-patches ~/.claude/mcp.json
+# 6. Configure Claude Code MCP
+# Add to ~/.claude/mcp.json:
+# "squirrel": {"command": "sqrl", "args": ["mcp"]}
 
-7. Start coding with Claude Code
-   # Daemon watches, sends to Python, caches views
+# 7. Start coding - Squirrel learns automatically
 ```
 
 ## Build Artifacts
 
 ```
 agent/target/
-├── debug/
-│   └── sqrl                # Development binary
-└── release/
-    └── sqrl                # Production binary
+├── debug/sqrl              # Development binary
+└── release/sqrl            # Production binary
 
-memory_service/dist/
-└── squirrel_memory-0.1.0-py3-none-any.whl
-```
-
-## Distribution (Future)
-
-```
-Planned package structure:
-
-macOS:
-  brew install sqrl
-  → /usr/local/bin/sqrl
-
-Linux:
-  curl -fsSL https://get.sqrl.dev | sh
-  → ~/.local/bin/sqrl
-
-Windows:
-  scoop install sqrl
-  → C:\Users\<user>\scoop\apps\sqrl\current\sqrl.exe
+memory_service/
+└── models/all-MiniLM-L6-v2.onnx  # Downloaded on first run
 ```
 
 ## Notes for AI Assistants
 
 When modifying code:
-- Rust changes: navigate to `agent/src/<file>.rs`
-- Python changes: navigate to `memory_service/squirrel_memory/<file>.py`
-- Docs updates: navigate to `docs/<file>.md`
-- Config changes: update appropriate `.md` file in root
+- Rust changes: `agent/src/<file>.rs`
+- Python changes: `memory_service/squirrel_memory/<file>.py`
+- Docs updates: `docs/<file>.md`
 
-SQLite schemas defined in:
-- Rust: `agent/src/storage.rs`
-- Python: `memory_service/squirrel_memory/storage.py`
-
-HTTP API contract: See `docs/API.md`
-MCP protocol: See `docs/MCP_TOOLS.md`
+Key integration points:
+- IPC protocol: `agent/src/ipc.rs` ↔ `memory_service/squirrel_memory/server.py`
+- SQLite schema: `agent/src/storage.rs`
+- MCP tools: `agent/src/mcp.rs`
+- Router Agent prompts: `memory_service/squirrel_memory/router_agent.py`
