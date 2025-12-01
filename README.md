@@ -1,151 +1,185 @@
 # Squirrel
 
-Local-first memory system for AI coding tools. Learns your coding patterns and provides personalized, task-aware context to AI assistants via MCP.
+Local-first memory system for AI coding tools. Learns your coding patterns and provides personalized, task-aware context via MCP.
 
 ## What It Does
 
-Squirrel passively watches your development activity, extracts coding patterns and project knowledge, and feeds that context back to AI tools so they generate code matching your style.
-
 ```
-You code with Claude Code
-        ↓
-Squirrel watches and learns
-        ↓
-AI tools get personalized context
-        ↓
-Better code suggestions
-```
-
-The more you code, the better Squirrel understands your preferences.
-
-## Key Features
-
-- **Task-Aware Context**: Given a specific task, returns only relevant memory with explanations
-- **User Style Memory**: Learns your coding preferences (async/await, type hints, testing patterns)
-- **Project Knowledge**: Remembers project facts (framework, database, key endpoints)
-- **Token-Efficient**: Budget-bounded outputs that fit any context window
-- **Local-First**: All data stays on your machine
-
-## Quick Start
-
-```bash
-# Install
-brew install sqrl
-
-# Start daemon (one per machine)
-sqrl daemon start
-
-# Initialize a project
-cd ~/my-project
-sqrl init
-
-# Done - Squirrel now watches and learns
+You code with Claude Code / Codex / Cursor / Gemini CLI
+                    ↓
+    Squirrel watches logs and learns (passive)
+                    ↓
+    AI tools call MCP → get personalized context
+                    ↓
+          Better code suggestions
 ```
 
 ## Architecture
 
-Two modules working together:
-
-| Module | Language | Role |
-|--------|----------|------|
-| **Rust Agent** | Rust | Daemon, file watchers, SQLite storage, MCP server, CLI |
-| **Memory Service** | Python | LLM-based pattern extraction, memory updates, view generation |
-
 ```
-~/.sqrl/                     # Global config and user memory
-<repo>/.ctx/                 # Per-project events, episodes, memory, views
+┌─────────────────────────────────────────────────────────────────┐
+│                        RUST DAEMON                              │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────────────┐│
+│  │Log Watch │  │ SQLite   │  │MCP Server│  │      CLI         ││
+│  │(4 CLIs)  │  │sqlite-vec│  │(2 tools) │  │sqrl init/status  ││
+│  └────┬─────┘  └────┬─────┘  └────┬─────┘  └──────────────────┘│
+│       └─────────────┴─────────────┴─────────────────────────────│
+│                            ↕ Unix socket IPC                    │
+└─────────────────────────────────────────────────────────────────┘
+                             ↕
+┌─────────────────────────────────────────────────────────────────┐
+│                      PYTHON MEMORY SERVICE                      │
+│  ┌───────────────────────────────────────────────────────────┐ │
+│  │              Router Agent (Dual Mode)                      │ │
+│  │  ┌─────────────────────┐  ┌─────────────────────────────┐ │ │
+│  │  │   INGEST Mode       │  │      ROUTE Mode             │ │ │
+│  │  │ events → memories   │  │ task → relevant memories    │ │ │
+│  │  │ ADD/UPDATE/NOOP     │  │ + "why" explanations        │ │ │
+│  │  └─────────────────────┘  └─────────────────────────────┘ │ │
+│  └───────────────────────────────────────────────────────────┘ │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────────────┐  │
+│  │  Embeddings  │  │  Retrieval   │  │   "Why" Generator    │  │
+│  │ (ONNX model) │  │ (similarity) │  │ (heuristic templates)│  │
+│  └──────────────┘  └──────────────┘  └──────────────────────┘  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+| Component | Language | Role |
+|-----------|----------|------|
+| **Rust Daemon** | Rust | Log watcher, SQLite + sqlite-vec, MCP server, CLI |
+| **Memory Service** | Python | Router Agent (dual-mode), ONNX embeddings, retrieval |
+
+## Quick Start
+
+```bash
+brew install sqrl
+sqrl daemon start
+cd ~/my-project && sqrl init
+# Done - Squirrel now watches and learns
 ```
 
 ## MCP Tools
 
-Squirrel exposes 5 MCP tools for AI assistants:
-
 | Tool | Purpose |
 |------|---------|
-| `get_task_context` | Task-aware memory with relevance explanations (primary) |
-| `get_user_style_view` | User coding preferences summary |
-| `get_project_brief_view` | Project overview and key facts |
-| `get_pitfalls_view` | Known pitfalls for specific scope |
-| `search_project_memory` | Semantic memory search with explanations |
-
-All tools accept `context_budget_tokens` to adapt to any model's context size.
+| `squirrel_get_task_context` | Task-aware memory with "why" explanations |
+| `squirrel_search_memory` | Semantic search across all memory |
 
 ## How It Works
 
-### Input (Passive Learning)
+### Input: Passive Log Watching
 
 ```
-Claude Code logs → Rust watcher → Events → Batch to Python
-                                              ↓
-                              Episodes → LLM extraction → Memory items
+~/.claude/projects/**/*.jsonl  ──┐
+~/.codex-cli/logs/**/*.jsonl   ──┼──→ Rust Daemon ──→ Events ──→ Episodes
+~/.gemini/logs/**/*.jsonl      ──┤                        ↓
+~/.cursor-tutor/logs/**/*.jsonl──┘               Python INGEST mode
+                                                         ↓
+                                              ADD/UPDATE/NOOP memories
 ```
 
-1. Squirrel watches `~/.claude/projects/**/*.jsonl`
-2. Parses logs into normalized Event structs
-3. Batches events (20 events or 30 seconds)
-4. Python groups events into Episodes (coding sessions)
-5. LLM extracts structured memory (user_style, project_fact, pitfalls)
-6. Mem0-style update logic keeps memory clean (ADD/UPDATE/NOOP/DELETE)
-
-### Output (On-Demand Context)
+### Output: MCP Tools
 
 ```
-AI tool calls MCP → Rust daemon → Python views → Structured JSON
+AI calls squirrel_get_task_context("Add delete endpoint")
+                    ↓
+            Rust MCP Server
+                    ↓ IPC
+         Python ROUTE mode + Retrieval
+                    ↓
+      Returns relevant memories + "why" explanations
 ```
 
-1. AI tool calls `get_task_context` with task description
-2. Python retrieves relevant memory candidates
-3. LLM selects and explains relevant memories
-4. Returns budget-bounded markdown + structured data
+## Memory Types
 
-## Example Output
+| Type | Description | Example |
+|------|-------------|---------|
+| `user_style` | Coding preferences | "Prefers async/await" |
+| `project_fact` | Project knowledge | "Uses PostgreSQL 15" |
+| `pitfall` | Known issues | "API returns 500 on null user_id" |
+| `recipe` | Common patterns | "Use repository pattern for DB" |
 
-```json
-{
-  "type": "task_context",
-  "task_description": "Add a delete endpoint",
-  "has_relevant_memory": true,
-  "selected_memories": [
-    {
-      "key": "async_preference",
-      "content": "Prefers async/await for I/O handlers",
-      "reason": "This is an HTTP endpoint; user prefers async."
-    },
-    {
-      "key": "testing_framework",
-      "content": "Uses pytest with fixtures",
-      "reason": "Task will need tests; user uses pytest fixtures."
-    }
-  ],
-  "markdown": "## Relevant memory\n\n- Use async/await\n- Add pytest fixtures"
-}
+## Project Structure
+
+```
+Squirrel/
+├── agent/                      # Rust daemon + CLI + MCP
+│   └── src/
+│       ├── daemon.rs           # Process management
+│       ├── watcher.rs          # Multi-CLI log watching
+│       ├── storage.rs          # SQLite + sqlite-vec
+│       ├── ipc.rs              # Unix socket client
+│       ├── mcp.rs              # MCP server (2 tools)
+│       └── cli.rs              # CLI commands
+│
+├── memory_service/             # Python Memory Service
+│   └── squirrel_memory/
+│       ├── server.py           # Unix socket IPC server
+│       ├── router_agent.py     # Dual-mode router (INGEST/ROUTE)
+│       ├── embeddings.py       # ONNX embeddings
+│       └── retrieval.py        # Similarity search + "why"
+│
+├── DEVELOPMENT_PLAN.md         # Implementation roadmap
+├── EXAMPLE.md                  # Detailed walkthrough
+└── README.md                   # This file
 ```
 
-## CLI Commands
+### Runtime Directories
+
+```
+~/.sqrl/
+├── config.toml                 # User settings, API keys
+├── squirrel.db                 # Global SQLite (user_style)
+├── projects.json               # Registered repos
+└── logs/                       # Daemon logs
+
+<repo>/.sqrl/
+├── squirrel.db                 # Project SQLite (project memories)
+└── config.toml                 # Project overrides (optional)
+```
+
+## Development Setup
+
+### Prerequisites
 
 ```bash
-sqrl init              # Initialize project, create .ctx/
-sqrl config            # Set user_id, API keys
-sqrl daemon start      # Start global daemon
-sqrl daemon stop       # Stop daemon
-sqrl status            # Show project memory state
-sqrl mcp               # Run MCP server (called by AI tools)
+# Rust 1.83+
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+
+# Python via uv
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# SQLite (usually pre-installed)
+sqlite3 --version
 ```
 
-## Data Model
+### Build
 
-| Table | Purpose |
-|-------|---------|
-| `events` | Raw activity from AI tools |
-| `episodes` | Grouped coding sessions with summaries |
-| `memory_items` | Long-term facts and preferences |
-| `view_meta` | Cache staleness tracking |
+```bash
+git clone https://github.com/kaminoguo/Squirrel.git
+cd Squirrel
 
-Memory types:
-- `user_style`: Coding preferences (async, type hints, naming)
-- `project_fact`: Project knowledge (framework, DB, services)
-- `pitfall`: Known issues and gotchas
-- `recipe`: Common patterns and solutions
+# Rust
+cd agent && cargo build && cargo test
+
+# Python
+cd ../memory_service
+uv venv && uv pip install -e ".[dev]"
+source .venv/bin/activate && pytest
+```
+
+### Run
+
+```bash
+# Start daemon
+cd agent && cargo run -- daemon start
+
+# Initialize project
+cd ~/my-project && sqrl init
+
+# Configure Claude Code MCP (add to ~/.claude/mcp.json)
+# "squirrel": {"command": "sqrl", "args": ["mcp"]}
+```
 
 ## Configuration
 
@@ -155,35 +189,36 @@ Memory types:
 id = "alice"
 
 [llm]
-openai_api_key = "sk-..."
 anthropic_api_key = "sk-ant-..."
-default_model = "gpt-4"
+default_model = "claude-sonnet-4-20250514"
 
 [daemon]
-port = 9468
+socket_path = "/tmp/sqrl_router.sock"
 ```
 
-## Documentation
+## Contributing
 
-- [Architecture Spec](docs/ARCHITECTURE.md) - Full technical design
-- [Development Plan](docs/DEVELOPMENT_PLAN.md) - Implementation roadmap
-- [Process Example](docs/EXAMPLE.md) - Detailed walkthrough
-- [Project Structure](docs/PROJECT_STRUCTURE.md) - Directory layout
+1. Fork and clone
+2. Create branch: `git checkout -b yourname/feat-description`
+3. Make changes, run tests
+4. Commit: `feat(scope): description`
+5. Push and create PR
 
-## MVP Scope (4 weeks)
+### Code Style
 
-**In:**
-- Single event source: Claude Code JSONL
-- 5 MCP tools with task-aware context
-- Two memory types: user_style, project_fact
-- Basic CLI: init, config, daemon, status
-- Budget-bounded, explainable outputs
+```bash
+# Rust
+cargo fmt && cargo clippy
 
-**Future:**
-- Multi-tool ingestion: Cursor, Codex CLI, Gemini CLI, Git
-- Advanced memory: pitfalls, recipes
-- Cloud sync, team memory sharing
-- Web dashboard
+# Python
+ruff check --fix . && ruff format .
+```
+
+## v1 Scope
+
+**In:** Passive log watching (4 CLIs), 2 MCP tools, 4 memory types, dual-mode Router Agent, SQLite + sqlite-vec
+
+**Future (v2):** Hooks output, file injection (AGENTS.md/GEMINI.md), cloud sync, team sharing
 
 ## License
 
