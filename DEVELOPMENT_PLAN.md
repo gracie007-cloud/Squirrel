@@ -119,10 +119,13 @@ Storage) Daemon) Router) Retrieval)
     id TEXT PRIMARY KEY,
     content_hash TEXT NOT NULL UNIQUE,
     content TEXT NOT NULL,
-    memory_type TEXT NOT NULL,
-    repo TEXT NOT NULL,
+    memory_type TEXT NOT NULL,        -- user_style | project_fact | pitfall | recipe
+    repo TEXT NOT NULL,               -- repo path OR 'global' for user-level memories
     embedding BLOB,
     confidence REAL NOT NULL,
+    importance TEXT NOT NULL DEFAULT 'medium',  -- critical | high | medium | low
+    user_id TEXT NOT NULL DEFAULT 'local',
+    assistant_id TEXT NOT NULL DEFAULT 'squirrel',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   );
@@ -330,12 +333,17 @@ Storage) Daemon) Router) Retrieval)
   async def ingest_mode(payload: dict) -> dict:
       """
       Input: {episode: {...}, events: [...]}
-      Output: {action: ADD|UPDATE|NOOP, memory?: {...}, confidence: float}
+      Output: {action: ADD|UPDATE|NOOP, memory?: {...}, confidence: float, importance: str}
 
       LLM prompt determines:
       - Is there a memorable pattern here?
       - What type? (user_style, project_fact, pitfall, recipe)
+      - What importance? (critical | high | medium | low)
       - Does it duplicate existing memory?
+
+      Near-duplicate check (before ADD):
+      - Query sqlite-vec for similar memories (same type + repo, similarity > 0.9)
+      - If found, LLM decides: NOOP (exact dup) or UPDATE (merge info)
       """
   ```
 
@@ -343,10 +351,14 @@ Storage) Daemon) Router) Retrieval)
   ```python
   async def route_mode(payload: dict) -> dict:
       """
-      Input: {task: str, candidates: [...]}
+      Input: {task: str, candidates: [...], context_budget_tokens: int}
       Output: {selected: [...], why: {...}}
 
-      LLM selects which candidates are relevant and generates "why"
+      v1: Heuristic scoring to select within token budget
+      score = w_sim * similarity + w_imp * importance_weight + w_rec * recency_score
+      (importance_weight: critical=1.0, high=0.75, medium=0.5, low=0.25)
+
+      v1.1 (future): LLM-based selection for complex disambiguation
       """
   ```
 
@@ -359,9 +371,12 @@ Storage) Daemon) Router) Retrieval)
       content_hash: str
       content: str
       memory_type: Literal["user_style", "project_fact", "pitfall", "recipe"]
-      repo: str
+      repo: str                    # repo path OR 'global' for user-level memories
       embedding: Optional[bytes]
       confidence: float
+      importance: Literal["critical", "high", "medium", "low"] = "medium"
+      user_id: str = "local"
+      assistant_id: str = "squirrel"
       created_at: datetime
       updated_at: datetime
   ```
@@ -376,6 +391,7 @@ Storage) Daemon) Router) Retrieval)
       repo: str
       task: Optional[str]
       memory_types: Optional[list[str]]
+      context_budget_tokens: int = 400   # Token limit for memory injection
       max_results: int = 20
   ```
 
@@ -427,20 +443,48 @@ Storage) Daemon) Router) Retrieval)
       # Simple keyword matching + template filling
   ```
 
-### D3. Memory Update Logic
+### D3. Near-Duplicate Check + Memory Update
 
-- [ ] Confidence threshold (0.7):
+- [ ] Near-duplicate detection (before ADD):
   ```python
-  async def process_ingest_result(result: dict, existing: list[Memory]) -> Memory | None:
+  async def check_near_duplicate(
+      memory: Memory,
+      similarity_threshold: float = 0.9
+  ) -> tuple[bool, Optional[Memory]]:
+      """
+      Query sqlite-vec for similar memories with same type + repo.
+      Returns (is_duplicate, existing_memory_if_found)
+      """
+      candidates = await retrieve_candidates(
+          repo=memory.repo,
+          task=memory.content,
+          memory_types=[memory.memory_type],
+          top_k=5
+      )
+      for candidate in candidates:
+          if candidate.similarity >= similarity_threshold:
+              return True, candidate
+      return False, None
+  ```
+
+- [ ] Confidence threshold (0.7) + dedup:
+  ```python
+  async def process_ingest_result(result: dict) -> Memory | None:
       if result["action"] == "NOOP":
           return None
       if result["confidence"] < 0.7:
           return None
 
       if result["action"] == "ADD":
-          return create_memory(result["memory"])
+          memory = build_memory(result["memory"])
+          is_dup, existing = await check_near_duplicate(memory)
+          if is_dup:
+              # LLM already handled dedup, but double-check via embedding
+              # If truly duplicate, return None; else merge
+              return await merge_or_skip(memory, existing)
+          return create_memory(memory)
       elif result["action"] == "UPDATE":
-          return update_memory(result["memory"], existing)
+          return update_memory(result["memory"])
   ```
 
 ---
@@ -459,7 +503,7 @@ Storage) Daemon) Router) Retrieval)
       input_schema: {
           "project_root": "string (required)",
           "task": "string (required)",
-          "max_tokens": "integer (default: 400)",
+          "context_budget_tokens": "integer (default: 400)",  // Token limit for memory injection
           "memory_types": "array of strings (optional)"
       }
   }
@@ -483,9 +527,10 @@ Storage) Daemon) Router) Retrieval)
   ```rust
   async fn handle_get_task_context(args: Value) -> Result<Value> {
       // 1. Retrieve candidates via IPC (fetch_memories)
-      // 2. Call Router Agent (route mode) via IPC
-      // 3. Format response with "why" explanations
-      // 4. Respect max_tokens budget
+      // 2. Call Router Agent (route mode) via IPC with context_budget_tokens
+      // 3. Route mode scores: w_sim * similarity + w_imp * importance + w_rec * recency
+      // 4. Select memories until token budget exhausted
+      // 5. Format response with "why" explanations
   }
   ```
 
@@ -580,11 +625,17 @@ Storage) Daemon) Router) Retrieval)
 
 ---
 
+## v1.1 Scope (Future Enhancement)
+
+Deferred from v1:
+- Two-level ROUTE: LLM-based selection for complex disambiguation
+- User override of importance via CLI (`sqrl memory set-importance <id> critical`)
+
 ## v2 Scope (Future)
 
 Not in v1:
 - Hooks output for Claude Code / Gemini CLI
 - File injection for AGENTS.md / GEMINI.md
-- Cloud sync
+- Cloud sync (user_id/assistant_id fields prepared)
 - Team memory sharing
 - Web dashboard

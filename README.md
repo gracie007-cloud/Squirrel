@@ -99,6 +99,15 @@ AI calls squirrel_get_task_context("Add delete endpoint")
 | `pitfall` | Known issues | "API returns 500 on null user_id" |
 | `recipe` | Common patterns | "Use repository pattern for DB" |
 
+## Memory Fields
+
+| Field | Description |
+|-------|-------------|
+| `importance` | critical / high / medium / low - used in retrieval scoring |
+| `repo` | repo path OR 'global' for user-level memories |
+| `user_id` | 'local' for v1, prepared for future cloud/team features |
+| `assistant_id` | 'squirrel' for v1, prepared for multi-agent scenarios |
+
 ## Project Structure
 
 ```
@@ -216,9 +225,18 @@ ruff check --fix . && ruff format .
 
 ## v1 Scope
 
-**In:** Passive log watching (4 CLIs), 2 MCP tools, 4 memory types, dual-mode Router Agent, SQLite + sqlite-vec
+**In:**
+- Passive log watching (4 CLIs)
+- 2 MCP tools
+- 4 memory types with importance levels
+- Dual-mode Router Agent (INGEST + ROUTE)
+- Near-duplicate deduplication (0.9 similarity threshold)
+- Heuristic scoring: similarity + importance + recency
+- SQLite + sqlite-vec
 
-**Future (v2):** Hooks output, file injection (AGENTS.md/GEMINI.md), cloud sync, team sharing
+**v1.1:** Two-level ROUTE (LLM selection for complex cases), user importance override
+
+**v2:** Hooks output, file injection (AGENTS.md/GEMINI.md), cloud sync, team sharing
 
 ## License
 

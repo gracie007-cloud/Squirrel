@@ -139,6 +139,8 @@ async def ingest_mode(payload: dict) -> dict:
             {
                 "type": "user_style",
                 "content": "Prefers async/await with type hints for all handlers",
+                "importance": "high",  # critical | high | medium | low
+                "repo": "global",      # 'global' for user-level, or repo path
             }
         ],
         "confidence": 0.85
@@ -156,14 +158,32 @@ Activity:
 
 Decide:
 - Is there a memorable pattern? (user_style, project_fact, pitfall, recipe)
+- What importance level? (critical | high | medium | low)
+- Is this user-level (repo='global') or project-specific?
 - Does it duplicate existing memory?
 
-Return: {action: ADD|UPDATE|NOOP, memories: [{type, content}], confidence: 0.0-1.0}
+Return: {action: ADD|UPDATE|NOOP, memories: [{type, content, importance, repo}], confidence: 0.0-1.0}
 ```
 
-### Step 3.2: Save Memory
+### Step 3.2: Near-Duplicate Check + Save Memory
 
-If confidence >= 0.7 and action is ADD/UPDATE:
+If confidence >= 0.7 and action is ADD:
+
+```python
+# Before saving, check for near-duplicates
+candidates = await retrieve_candidates(
+    repo=memory.repo,
+    task=memory.content,
+    memory_types=[memory.memory_type],
+    top_k=5
+)
+for candidate in candidates:
+    if candidate.similarity >= 0.9:
+        # Near-duplicate found - LLM decides merge or skip
+        return await merge_or_skip(memory, candidate)
+```
+
+If no duplicate found:
 
 ```rust
 let memory = Memory {
@@ -171,9 +191,12 @@ let memory = Memory {
     content_hash: hash(&content),
     content: "Prefers async/await with type hints for all handlers",
     memory_type: "user_style",
-    repo: "/Users/alice/projects/inventory-api",
-    embedding: embed(&content),  // 384-dim ONNX
+    repo: "global",               // 'global' for user-level memories
+    embedding: embed(&content),   // 384-dim ONNX
     confidence: 0.85,
+    importance: "high",           // LLM-assigned importance
+    user_id: "local",
+    assistant_id: "squirrel",
     created_at: now(),
     updated_at: now(),
 };
@@ -192,7 +215,7 @@ storage.save_memory(memory)?;
   "arguments": {
     "project_root": "/Users/alice/projects/inventory-api",
     "task": "Add a delete endpoint for inventory items",
-    "max_tokens": 400
+    "context_budget_tokens": 400
   }
 }
 ```
@@ -203,18 +226,20 @@ storage.save_memory(memory)?;
 async def route_mode(payload: dict) -> dict:
     task = payload["task"]
     candidates = payload["candidates"]
+    budget = payload["context_budget_tokens"]
 
-    # LLM selects relevant memories and generates "why"
-    response = await llm.call(ROUTE_PROMPT.format(
-        task=task,
-        candidates=format_candidates(candidates)
-    ))
+    # v1: Heuristic scoring (no LLM call)
+    # score = w_sim * similarity + w_imp * importance_weight + w_rec * recency
+    # importance_weight: critical=1.0, high=0.75, medium=0.5, low=0.25
+    scored = score_candidates(candidates, task)
+    selected = select_within_budget(scored, budget)
 
     return {
         "memories": [
             {
                 "type": "user_style",
                 "content": "Prefers async/await with type hints",
+                "importance": "high",
                 "why": "Relevant because you're adding an HTTP endpoint"
             }
         ],
@@ -231,11 +256,13 @@ async def route_mode(payload: dict) -> dict:
     {
       "type": "user_style",
       "content": "Prefers async/await with type hints for all handlers",
+      "importance": "high",
       "why": "Relevant because you're adding an HTTP endpoint"
     },
     {
       "type": "project_fact",
       "content": "Uses FastAPI with Pydantic models",
+      "importance": "medium",
       "why": "Relevant because delete endpoint needs proper response model"
     }
   ],
@@ -268,10 +295,13 @@ CREATE TABLE memories (
     id TEXT PRIMARY KEY,
     content_hash TEXT NOT NULL UNIQUE,
     content TEXT NOT NULL,
-    memory_type TEXT NOT NULL,  -- user_style | project_fact | pitfall | recipe
-    repo TEXT NOT NULL,
-    embedding BLOB,             -- 384-dim float32
+    memory_type TEXT NOT NULL,        -- user_style | project_fact | pitfall | recipe
+    repo TEXT NOT NULL,               -- repo path OR 'global' for user-level memories
+    embedding BLOB,                   -- 384-dim float32
     confidence REAL NOT NULL,
+    importance TEXT NOT NULL DEFAULT 'medium',  -- critical | high | medium | low
+    user_id TEXT NOT NULL DEFAULT 'local',
+    assistant_id TEXT NOT NULL DEFAULT 'squirrel',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -286,8 +316,9 @@ CREATE TABLE memories (
 | Setup | `sqrl init` registers project |
 | Learning | Daemon watches CLI logs, parses to Events |
 | Batching | Groups events into Episodes (4-hour window OR 50 events) |
-| Extraction | Router Agent INGEST decides ADD/UPDATE/NOOP |
-| Retrieval | MCP tool → Router Agent ROUTE → memories with "why" |
+| Extraction | Router Agent INGEST decides ADD/UPDATE/NOOP, assigns importance |
+| Dedup | Near-duplicate check (0.9 similarity) before ADD |
+| Retrieval | MCP tool → ROUTE mode scores by similarity+importance+recency → select within token budget |
 
 ---
 
@@ -299,3 +330,7 @@ CREATE TABLE memories (
 | Session tracking | None | Simpler, CLI-agnostic |
 | Event schema | Normalized (no CLI field) | All CLIs treated equally |
 | Episode storage | Not stored | Just internal batching |
+| User-level memories | repo='global' | Simpler than separate flag |
+| Importance levels | critical/high/medium/low | Prioritize memories in retrieval |
+| Near-duplicate threshold | 0.9 similarity | Avoid redundant memories |
+| ROUTE mode (v1) | Heuristic scoring | Fast, no LLM call needed |
