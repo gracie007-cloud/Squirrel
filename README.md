@@ -1,17 +1,22 @@
 # Squirrel
 
-Local-first memory system for AI coding tools. Learns your coding patterns and provides personalized, task-aware context via MCP.
+Local-first memory system for AI coding tools. Learns from your successes AND failures, providing personalized, task-aware context via MCP.
 
 ## What It Does
 
 ```
 You code with Claude Code / Codex / Cursor / Gemini CLI
                     ↓
-    Squirrel watches logs and learns (passive)
+    Squirrel watches logs (100% passive, invisible)
+                    ↓
+    LLM analyzes: What succeeded? What failed?
+                    ↓
+    SUCCESS → recipe/project_fact memories
+    FAILURE → pitfall memories (what NOT to do)
                     ↓
     AI tools call MCP → get personalized context
                     ↓
-          Better code suggestions
+          Better code suggestions + avoid past mistakes
 ```
 
 ## Architecture
@@ -33,8 +38,10 @@ You code with Claude Code / Codex / Cursor / Gemini CLI
 │  │              Router Agent (Dual Mode)                      │ │
 │  │  ┌─────────────────────┐  ┌─────────────────────────────┐ │ │
 │  │  │   INGEST Mode       │  │      ROUTE Mode             │ │ │
-│  │  │ events → memories   │  │ task → relevant memories    │ │ │
-│  │  │ ADD/UPDATE/NOOP     │  │ + "why" explanations        │ │ │
+│  │  │ Episode → LLM:      │  │ task → relevant memories    │ │ │
+│  │  │  1. Segment tasks   │  │ + "why" explanations        │ │ │
+│  │  │  2. SUCCESS/FAILURE │  │                             │ │ │
+│  │  │  3. Extract memories│  │                             │ │ │
 │  │  └─────────────────────┘  └─────────────────────────────┘ │ │
 │  └───────────────────────────────────────────────────────────┘ │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────────────┐  │
@@ -67,7 +74,7 @@ cd ~/my-project && sqrl init
 
 ## How It Works
 
-### Input: Passive Log Watching
+### Input: Passive Log Watching + Success Detection
 
 ```
 ~/.claude/projects/**/*.jsonl  ──┐
@@ -75,8 +82,16 @@ cd ~/my-project && sqrl init
 ~/.gemini/logs/**/*.jsonl      ──┤                        ↓
 ~/.cursor-tutor/logs/**/*.jsonl──┘               Python INGEST mode
                                                          ↓
-                                              ADD/UPDATE/NOOP memories
+                                              LLM analyzes Episode:
+                                              1. Segment Tasks
+                                              2. Classify: SUCCESS | FAILURE | UNCERTAIN
+                                              3. Extract memories by outcome
 ```
+
+**Why success detection matters:** Without it, we'd blindly store all patterns - including the 4 failed approaches before the 1 that worked. With success detection:
+- SUCCESS → recipe/project_fact (reusable patterns)
+- FAILURE → pitfall (what NOT to do next time)
+- UNCERTAIN → skip (not enough info)
 
 ### Output: MCP Tools
 
@@ -236,7 +251,9 @@ ruff check --fix . && ruff format .
 ## v1 Scope
 
 **In:**
-- Passive log watching (4 CLIs)
+- Passive log watching (4 CLIs) - 100% invisible during use
+- **Success detection: LLM classifies task outcomes (SUCCESS/FAILURE/UNCERTAIN)**
+- **Outcome-based memory extraction (SUCCESS→recipe, FAILURE→pitfall)**
 - 2 MCP tools
 - 4 memory types with importance levels
 - Dual-mode Router Agent (INGEST + ROUTE)

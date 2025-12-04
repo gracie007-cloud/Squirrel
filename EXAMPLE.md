@@ -4,9 +4,15 @@ Detailed example demonstrating the entire Squirrel data flow from user coding to
 
 ## Core Concept
 
-Squirrel watches AI tool logs, groups events into **Episodes** (4-hour time windows), and asks the Router Agent: "What stable patterns can we learn?"
+Squirrel watches AI tool logs, groups events into **Episodes** (4-hour time windows), and asks the Router Agent to analyze the entire session:
+
+1. **Segment Tasks** - Identify distinct user goals within the episode
+2. **Classify Outcomes** - SUCCESS | FAILURE | UNCERTAIN for each task
+3. **Extract Memories** - SUCCESS→recipe/project_fact, FAILURE→pitfall, UNCERTAIN→skip
 
 Episode = batch of events from same repo within 4-hour window (internal batching, not a product concept).
+
+**The key insight:** Passive learning requires knowing WHAT succeeded before extracting patterns. We don't ask users to confirm - we infer from conversation flow.
 
 ---
 
@@ -45,13 +51,27 @@ File structure:
 
 ## Phase 2: Learning (Passive Collection)
 
-### Step 2.1: Alice Codes
+### Step 2.1: Alice Codes (Two Tasks in One Session)
 
 ```
+# Task 1: Add endpoint (SUCCESS)
 Alice: "Add a new endpoint to get inventory items by category"
 Claude Code: "I'll create a GET endpoint..."
 Alice: "Use async def, add type hints, and write a pytest fixture"
 Claude Code: [Revises code with async, types, fixture]
+Alice: "Perfect, tests pass!"
+
+# Task 2: Fix auth bug (FAILURE then SUCCESS)
+Alice: "There's an auth loop bug when tokens expire"
+Claude Code: "Let me check localStorage..."
+[Error persists]
+Alice: "Still broken"
+Claude Code: "Let me try checking cookies..."
+[Error persists]
+Alice: "That didn't work either"
+Claude Code: "I think the issue is in useEffect cleanup..."
+[Implements fix]
+Alice: "That fixed it, thanks!"
 ```
 
 ### Step 2.2: Rust Daemon Watches Logs
@@ -118,7 +138,9 @@ fn flush_episode(repo: &str, events: Vec<Event>) {
 
 ## Phase 3: Memory Extraction (Python Service)
 
-### Step 3.1: Router Agent INGEST Mode
+### Step 3.1: Router Agent INGEST Mode (Success Detection)
+
+The LLM analyzes the entire Episode in ONE call - segmenting tasks, classifying outcomes, and extracting memories:
 
 ```python
 async def ingest_mode(payload: dict) -> dict:
@@ -130,39 +152,75 @@ async def ingest_mode(payload: dict) -> dict:
         for e in episode["events"]
     ])
 
-    # LLM decides: is there a memorable pattern?
+    # LLM analyzes: tasks, outcomes, and memories in ONE call
     response = await llm.call(INGEST_PROMPT.format(context=context))
 
     return {
-        "action": "ADD",  # ADD | UPDATE | NOOP
-        "memories": [
+        "tasks": [
             {
-                "type": "user_style",
-                "content": "Prefers async/await with type hints for all handlers",
-                "importance": "high",  # critical | high | medium | low
-                "repo": "global",      # 'global' for user-level, or repo path
+                "task": "Add category endpoint",
+                "outcome": "SUCCESS",
+                "evidence": "User said 'Perfect, tests pass!'",
+                "memories": [
+                    {
+                        "type": "user_style",
+                        "content": "Prefers async/await with type hints for all handlers",
+                        "importance": "high",
+                        "repo": "global",
+                    }
+                ]
+            },
+            {
+                "task": "Fix auth loop bug",
+                "outcome": "SUCCESS",  # Eventually succeeded after failures
+                "evidence": "User said 'That fixed it, thanks!'",
+                "memories": [
+                    {
+                        "type": "pitfall",
+                        "content": "Auth token refresh loops are NOT caused by localStorage or cookies - check useEffect cleanup first",
+                        "importance": "high",
+                        "repo": "/Users/alice/projects/inventory-api",
+                    },
+                    {
+                        "type": "recipe",
+                        "content": "For auth redirect loops, fix useEffect cleanup to prevent re-triggering on token refresh",
+                        "importance": "high",
+                        "repo": "/Users/alice/projects/inventory-api",
+                    }
+                ]
             }
         ],
-        "confidence": 0.85
+        "confidence": 0.9
     }
 ```
 
 INGEST Prompt:
 ```
-Analyze this coding activity. Extract stable patterns worth remembering.
+Analyze this coding session (~4 hours of activity):
 
-Activity:
 [user] Add a new endpoint to get inventory items by category
 [assistant] I'll create a GET endpoint...
 [user] Use async def, add type hints, and write a pytest fixture
+[assistant] [Revises code with async, types, fixture]
+[user] Perfect, tests pass!
+[user] There's an auth loop bug when tokens expire
+[assistant] Let me check localStorage...
+[user] Still broken
+[assistant] Let me try checking cookies...
+[user] That didn't work either
+[assistant] I think the issue is in useEffect cleanup...
+[user] That fixed it, thanks!
 
-Decide:
-- Is there a memorable pattern? (user_style, project_fact, pitfall, recipe)
-- What importance level? (critical | high | medium | low)
-- Is this user-level (repo='global') or project-specific?
-- Does it duplicate existing memory?
+Analyze this session:
+1. Identify distinct Tasks (user goals like "add endpoint", "fix bug")
+2. For each Task, determine:
+   - outcome: SUCCESS | FAILURE | UNCERTAIN
+   - evidence: why you classified it this way (quote user if possible)
+3. For SUCCESS tasks: extract recipe (reusable pattern) or project_fact memories
+4. For FAILURE tasks: extract pitfall memories (what NOT to do)
+5. For tasks with failed attempts before success: extract BOTH pitfall AND recipe
 
-Return: {action: ADD|UPDATE|NOOP, memories: [{type, content, importance, repo}], confidence: 0.0-1.0}
+Return only high-confidence memories. When in doubt, skip.
 ```
 
 ### Step 3.2: UUID→Integer Mapping for LLM
@@ -390,9 +448,19 @@ CREATE TABLE memory_access_log (
 | Setup | `sqrl init` registers project |
 | Learning | Daemon watches CLI logs, parses to Events |
 | Batching | Groups events into Episodes (4-hour window OR 50 events) |
-| Extraction | Router Agent INGEST decides ADD/UPDATE/NOOP, assigns importance |
+| **Success Detection** | LLM segments Tasks, classifies SUCCESS/FAILURE/UNCERTAIN |
+| Extraction | SUCCESS→recipe/project_fact, FAILURE→pitfall, UNCERTAIN→skip |
 | Dedup | Near-duplicate check (0.9 similarity) before ADD |
 | Retrieval | MCP tool → ROUTE mode scores by similarity+importance+recency → select within token budget |
+
+### Why Success Detection Matters
+
+Without success detection, we'd blindly store patterns without knowing if they worked:
+- User tries 5 approaches, only #5 works
+- Old approach: Store all 5 as "patterns" (4 are wrong!)
+- With success detection: Store #1-4 as pitfalls, #5 as recipe
+
+This is the core insight from analyzing claude-cache: passive learning REQUIRES outcome classification.
 
 ---
 
@@ -401,6 +469,9 @@ CREATE TABLE memory_access_log (
 | Decision | Choice | Why |
 |----------|--------|-----|
 | Episode trigger | 4-hour window OR 50 events | Balance context vs LLM cost |
+| **Success detection** | LLM classifies outcomes | Core insight for passive learning |
+| **Task segmentation** | LLM decides, no rules engine | Simple, semantic understanding |
+| **Memory extraction** | Outcome-based (SUCCESS→recipe, FAILURE→pitfall) | Learn from both success and failure |
 | Session tracking | None | Simpler, CLI-agnostic |
 | Event schema | Normalized (no CLI field) | All CLIs treated equally |
 | Episode storage | Not stored | Just internal batching |
@@ -412,3 +483,4 @@ CREATE TABLE memory_access_log (
 | Memory deletion | Soft-delete (state column) | Recoverable, audit trail |
 | History tracking | old/new content per change | Debug, rollback capability |
 | Access logging | Log every retrieval | Debug why memories surface |
+| **100% passive** | No user prompts or confirmations | Invisible during use |

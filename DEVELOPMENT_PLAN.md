@@ -16,10 +16,37 @@ Modular development plan for v1 architecture with Rust daemon + Python Memory Se
 ┌─────────────────────────────────────────────────────────────────┐
 │                     PYTHON MEMORY SERVICE                       │
 │  Router Agent (dual-mode: INGEST + ROUTE)                       │
+│  ┌───────────────────────────────────────────────────────────┐  │
+│  │ INGEST Mode: LLM analyzes Episode in one call:            │  │
+│  │   1. Identify Tasks (user goals within the episode)       │  │
+│  │   2. Classify each Task: SUCCESS | FAILURE | UNCERTAIN    │  │
+│  │   3. Extract memories: SUCCESS→recipe/project_fact,       │  │
+│  │      FAILURE→pitfall, UNCERTAIN→skip                      │  │
+│  └───────────────────────────────────────────────────────────┘  │
 │  ONNX Embeddings (all-MiniLM-L6-v2, 384-dim)                    │
 │  Retrieval + "Why" generation                                   │
 └─────────────────────────────────────────────────────────────────┘
 ```
+
+## Core Insight: Success Detection
+
+Passive learning from logs requires knowing WHAT succeeded and WHAT failed. Unlike explicit APIs where users call `memory.add()`, we must infer success from conversation patterns.
+
+**Success signals (implicit):**
+- AI says "done" / "complete" + User moves to next task → SUCCESS
+- Tests pass, build succeeds → SUCCESS
+- User says "thanks", "perfect", "works" → SUCCESS
+
+**Failure signals:**
+- Same error reappears after attempted fix → FAILURE
+- User says "still broken", "that didn't work" → FAILURE
+- User abandons task mid-conversation → UNCERTAIN
+
+**The LLM-decides-everything approach:**
+- One LLM call per Episode (4-hour window)
+- LLM segments tasks, classifies outcomes, extracts memories
+- No rules engine, no heuristics for task detection
+- 100% passive - no user prompts or confirmations
 
 ## Development Tracks
 
@@ -358,13 +385,34 @@ Storage) Daemon) Router) Retrieval)
   async def ingest_mode(payload: dict) -> dict:
       """
       Input: {episode: {...}, events: [...]}
-      Output: {action: ADD|UPDATE|NOOP, memory?: {...}, confidence: float, importance: str}
+      Output: {
+          tasks: [
+              {
+                  task: str,                          # What user was trying to do
+                  outcome: SUCCESS | FAILURE | UNCERTAIN,
+                  evidence: str,                      # Why this classification
+                  memories: [                         # Only if outcome != UNCERTAIN
+                      {type, content, importance, repo}
+                  ]
+              }
+          ],
+          confidence: float
+      }
 
-      LLM prompt determines:
-      - Is there a memorable pattern here?
-      - What type? (user_style, project_fact, pitfall, recipe)
-      - What importance? (critical | high | medium | low)
-      - Does it duplicate existing memory?
+      LLM analyzes entire Episode in ONE call:
+      1. Segment into distinct Tasks (user goals like "fix bug X", "add feature Y")
+      2. For each Task, classify outcome:
+         - SUCCESS: User moved to next task, tests passed, "thanks"
+         - FAILURE: Same error recurs, "still broken", abandoned
+         - UNCERTAIN: Incomplete information, skip memory extraction
+      3. Extract memories based on outcome:
+         - SUCCESS → recipe (reusable pattern) or project_fact (learned info)
+         - FAILURE → pitfall (what NOT to do, with why it failed)
+         - UNCERTAIN → nothing
+
+      This is the core passive learning insight: we MUST know what succeeded
+      before extracting patterns. Competitors with explicit APIs (mem0) don't
+      need this - users explicitly call memory.add() for successes only.
 
       Near-duplicate check (before ADD):
       - Query sqlite-vec for similar memories (same type + repo, similarity > 0.9)
@@ -802,7 +850,7 @@ Not in v1:
 
 ## Patterns Adopted from Competitor Analysis
 
-The following patterns were incorporated from analyzing mem0/OpenMemory and Memori:
+The following patterns were incorporated from analyzing mem0/OpenMemory, Memori, and claude-cache:
 
 | Pattern | Source | Location in Plan |
 |---------|--------|------------------|
@@ -811,9 +859,31 @@ The following patterns were incorporated from analyzing mem0/OpenMemory and Memo
 | Structured exceptions with codes | mem0 | Track C (C4) |
 | Memory state machine (soft-delete) | mem0 | Track A (state column), Track C (MemoryState enum) |
 | Access logging for debugging | mem0 | Track A (memory_access_log table), Track D (D5) |
+| **Success detection (implicit signals)** | claude-cache | Core Architecture, Track C (INGEST mode) |
+| **Anti-pattern/pitfall learning** | claude-cache | Memory types (pitfall), INGEST mode |
+| **LLM-decides-everything approach** | claude-cache + simplification | Track C (INGEST mode) |
+
+### Critical Insight from claude-cache (0-star repo)
+
+claude-cache solved the core problem we overlooked: **how do you know what to learn from passive observation?**
+
+Their approach (multi-signal success detection):
+- Explicit: "thanks", "that worked", tests pass
+- Implicit: AI says "done" + User moves to next task = SUCCESS
+- Behavioral: Task transition without complaints = SUCCESS
+
+Our simplification:
+- No complex rules engine or signal weighting
+- Single LLM call per Episode decides everything (task segmentation + outcome + memories)
+- Let the LLM understand conversation semantics instead of regex patterns
+
+This is why mem0 (50k stars) didn't help us - their users explicitly call `memory.add()`.
+Only passive learning systems need success detection.
 
 Patterns explicitly NOT adopted:
 - Two LLM calls per memory add (expensive) - we use single-pass extraction
 - Heavy infrastructure (22 vector stores) - we use SQLite-only
 - LLM-based categorization on insert - we use source-based categories
 - Explicit API approach - we use passive CLI watching
+- Complex Task/Attempt hierarchy - we let LLM segment tasks naturally
+- Rules engines for success detection - LLM understands context better
