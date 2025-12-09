@@ -9,10 +9,16 @@ You code with Claude Code / Codex / Cursor / Gemini CLI
                     ↓
     Squirrel watches logs (100% passive, invisible)
                     ↓
-    LLM analyzes: What succeeded? What failed?
+    LLM segments session by type:
+      EXECUTION_TASK → SUCCESS/FAILURE/UNCERTAIN
+      PLANNING_DECISION → decisions, rationale
+      RESEARCH_LEARNING → knowledge gained
+      DISCUSSION → insights, preferences
                     ↓
-    SUCCESS → recipe/project_fact memories
-    FAILURE → pitfall memories (what NOT to do)
+    Extracts memories:
+      lesson (what worked/failed)
+      fact (project knowledge)
+      profile (user preferences)
                     ↓
     AI tools call MCP → get personalized context
                     ↓
@@ -50,7 +56,7 @@ You code with Claude Code / Codex / Cursor / Gemini CLI
 │  └───────────────────────────────────────────────────────────┘ │
 │  ┌──────────────┐  ┌──────────────┐                            │
 │  │  Embeddings  │  │  Retrieval   │                            │
-│  │ (ONNX model) │  │ (similarity) │                            │
+│  │  (API-based) │  │ (similarity) │                            │
 │  └──────────────┘  └──────────────┘                            │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -58,7 +64,19 @@ You code with Claude Code / Codex / Cursor / Gemini CLI
 | Component | Language | Role |
 |-----------|----------|------|
 | **Rust Daemon** | Rust | Log watcher, SQLite + sqlite-vec, MCP server, thin CLI |
-| **Python Agent** | Python | Unified agent with tools, ONNX embeddings, retrieval |
+| **Python Agent** | Python | Unified agent with tools, API embeddings, retrieval |
+
+### Technology Stack
+
+| Layer | Technology | Notes |
+|-------|------------|-------|
+| **Storage** | SQLite + sqlite-vec | Local-first, vector search |
+| **IPC** | JSON-RPC 2.0 over Unix socket | MCP-compatible protocol |
+| **MCP SDK** | rmcp (official Rust SDK) | modelcontextprotocol/rust-sdk |
+| **Agent Framework** | PydanticAI + LiteLLM | Multi-provider LLM support |
+| **Embeddings** | OpenAI text-embedding-3-small | 1536-dim, API-based |
+| **Build/Release** | dist (cargo-dist) | Generates Homebrew, MSI, installers |
+| **Auto-update** | axoupdater | dist's official updater |
 
 ## Quick Start
 
@@ -66,13 +84,22 @@ You code with Claude Code / Codex / Cursor / Gemini CLI
 # Install (detects OS automatically)
 curl -sSL https://sqrl.dev/install.sh | sh
 
+# First run: select which CLIs you use
+sqrl config
+# → Select: Claude Code, Codex CLI, Gemini CLI, Cursor
+
+# Initialize a project
+cd ~/my-project
+sqrl init
+# → Configures MCP for selected CLIs
+# → Adds Squirrel instructions to CLAUDE.md, AGENTS.md, etc.
+# → Ingests recent history
+
 # Natural language - just talk to it
-sqrl "setup for this project"
 sqrl "what do you know about auth here"
 sqrl "show my coding style"
 
-# Or direct commands if you prefer
-sqrl init
+# Or direct commands
 sqrl search "database patterns"
 sqrl status
 ```
@@ -81,13 +108,22 @@ sqrl status
 
 | Platform | Method |
 |----------|--------|
-| **Mac** | `brew install sqrl` or install script |
-| **Linux** | Install script, AUR (Arch), nixpkg (NixOS) |
-| **Windows** | `winget install sqrl` or `scoop install sqrl` |
+| **Mac** | `brew install sqrl` (recommended) or install script |
+| **Linux** | `brew install sqrl`, install script, AUR (Arch), nixpkg (NixOS) |
+| **Windows** | MSI installer (recommended), `winget install sqrl`, or install script |
 
-Universal install script works on all platforms:
+Universal install script (fallback):
 ```bash
+# Mac/Linux
 curl -sSL https://sqrl.dev/install.sh | sh
+
+# Windows (PowerShell)
+irm https://sqrl.dev/install.ps1 | iex
+```
+
+Auto-update:
+```bash
+sqrl update    # Updates both Rust daemon and Python agent
 ```
 
 ## How It Works
@@ -106,6 +142,26 @@ Next sqrl command → daemon starts again
 
 No manual daemon management. No system services. Just works.
 
+### CLI Selection (Global)
+
+First run (or `sqrl config`) lets you select which CLIs you use:
+
+```bash
+sqrl config
+# Interactive: select Claude Code, Codex CLI, Gemini CLI, Cursor
+```
+
+```toml
+# ~/.sqrl/config.toml
+[agents]
+claude_code = true
+codex_cli = true
+gemini_cli = false
+cursor = true
+```
+
+Only selected CLIs get configured during `sqrl init`.
+
 ### Project Initialization
 
 ```bash
@@ -114,14 +170,29 @@ sqrl init
 ```
 
 This:
-1. Scans CLI log folders for logs mentioning this project
-2. Ingests recent history (token-limited, small projects get all, large projects get recent)
-3. Creates `.sqrl/squirrel.db` for project memories
-4. Detects which CLIs you use and offers to configure MCP
+1. Creates `.sqrl/squirrel.db` for project memories
+2. Scans CLI log folders for logs mentioning this project
+3. Ingests recent history (token-limited)
+4. For each enabled CLI:
+   - Configures MCP (adds Squirrel server to CLI's MCP config)
+   - Adds instruction text to agent file (CLAUDE.md, AGENTS.md, GEMINI.md, .cursor/rules/)
 
 Skip history ingestion:
 ```bash
 sqrl init --skip-history
+```
+
+### Syncing New CLIs
+
+If you enable a new CLI after initializing projects:
+
+```bash
+# Enable Cursor globally
+sqrl config  # select Cursor
+
+# Update all existing projects
+sqrl sync
+# → Adds MCP config + instructions for Cursor to all registered projects
 ```
 
 ### Passive Learning (Write Path)
@@ -135,13 +206,15 @@ Rust Daemon tails JSONL files → normalized Events
         ↓
 Buffers events, flushes as Episode (4hr window OR 50 events)
         ↓
-Python Agent analyzes Episode:
-  - Segments into Tasks ("fix auth bug", "add endpoint")
-  - Classifies: SUCCESS | FAILURE | UNCERTAIN
-  - Extracts memories:
-      SUCCESS → recipe or project_fact
-      FAILURE → pitfall
-      UNCERTAIN → skip
+Python Agent analyzes Episode (segment-first approach):
+  1. Segments by kind:
+     - EXECUTION_TASK (coding, fixing)
+     - PLANNING_DECISION (architecture, design)
+     - RESEARCH_LEARNING (learning, exploring)
+     - DISCUSSION (brainstorming, chat)
+  2. For EXECUTION_TASK only: SUCCESS | FAILURE | UNCERTAIN
+  3. Extracts memories based on segment kind
+  4. Checks for fact contradictions → invalidates old facts
         ↓
 Near-duplicate check (0.9 threshold) → store or merge
 ```
@@ -185,6 +258,16 @@ sqrl init --skip-history
 sqrl search "postgres"
 sqrl forget <memory-id>
 sqrl config set llm.model claude-sonnet
+sqrl sync                               # Update all projects with new CLI configs
+```
+
+### Export/Import
+
+```bash
+# Export/Import memories (for backup or sharing)
+sqrl export lesson                  # Export all lessons as JSON
+sqrl export fact --project          # Export project facts
+sqrl import memories.json           # Import memories
 ```
 
 ## MCP Tools
@@ -196,37 +279,123 @@ sqrl config set llm.model claude-sonnet
 
 ## Memory Types
 
-| Type | Description | Example |
-|------|-------------|---------|
-| `user_style` | Coding preferences | "Prefers async/await" |
-| `project_fact` | Project knowledge | "Uses PostgreSQL 15" |
-| `pitfall` | Known issues | "API returns 500 on null user_id" |
-| `recipe` | Successful patterns | "Use repository pattern for DB" |
+3 memory types, each with scope (global/project):
+
+| Type | Key Fields | Description | Example |
+|------|------------|-------------|---------|
+| `lesson` | outcome (success/failure/uncertain) | What worked or failed | "API 500 on null user_id", "Repository pattern works well" |
+| `fact` | key, value, evidence_source | Project/user knowledge | key=project.db.engine, value=PostgreSQL |
+| `profile` | (structured identity) | User background info | name, role, experience_level |
+
+### Scope
+
+| Scope | DB Location | Description |
+|-------|-------------|-------------|
+| Global | `~/.sqrl/squirrel.db` | User preferences, profile (applies to all projects) |
+| Project | `<repo>/.sqrl/squirrel.db` | Project-specific lessons and facts |
+
+### Declarative Keys (Facts)
+
+Critical facts use declarative keys for deterministic conflict detection:
+
+**Project-scoped keys:**
+```
+project.db.engine         # PostgreSQL, MySQL, SQLite
+project.api.framework     # FastAPI, Express, Rails
+project.language.main     # Python, TypeScript, Go
+project.auth.method       # JWT, session, OAuth
+```
+
+**User-scoped keys (global):**
+```
+user.preferred_style      # async_await, callbacks, sync
+user.preferred_language   # Python, TypeScript, Go
+user.comment_style        # minimal, detailed, jsdoc
+```
+
+Same key + different value → old fact automatically invalidated (no LLM needed).
+
+### Evidence Source (Facts)
+
+How a fact was learned:
+- `success` - Learned from successful task (high confidence)
+- `failure` - Learned from failed task (valuable pitfall)
+- `neutral` - Observed in planning/research/discussion
+- `manual` - User explicitly stated via CLI
+
+### Examples by Type
+
+**lesson (outcome=success):** patterns that worked
+- "Repository pattern works well for DB access"
+- "Batch inserts 10x faster than individual"
+
+**lesson (outcome=failure):** issues to avoid
+- "API returns 500 on null user_id"
+- "Never use ORM for bulk inserts"
+
+**fact (with key):** declarative project/user knowledge
+- key=project.db.engine, value=PostgreSQL, text="Uses PostgreSQL 15 via Prisma"
+- key=user.preferred_style, value=async_await, text="Prefers async/await over callbacks"
+
+**fact (free-text):** process history, decisions
+- "Tried Redis, failed due to memory, switched to PostgreSQL"
+- "Auth module handles JWT validation in middleware"
+
+**profile:** structured user identity
+- name, role, experience_level, company, primary_use_case
+
+### Memory Lifecycle
+
+Memories have status and validity tracking:
+
+| Status | Description | Retrieval |
+|--------|-------------|-----------|
+| `active` | Normal memory | Included |
+| `inactive` | Soft deleted via `sqrl forget` | Hidden (recoverable) |
+| `invalidated` | Superseded by newer fact | Hidden (keeps history) |
+
+**Fact contradiction handling:**
+- When new fact contradicts old (e.g., "uses PostgreSQL" vs "uses MySQL")
+- Old fact marked `invalidated`, `valid_to` set, `superseded_by` points to new
+- History preserved for debugging
+
+**Forget command:**
+```bash
+sqrl forget <memory-id>              # Soft delete by ID
+sqrl forget "deprecated API"         # Search + confirm + soft delete
+```
 
 ## Storage Layout
 
 ```
 ~/.sqrl/
 ├── config.toml                 # User settings, API keys
-├── squirrel.db                 # Global SQLite (user_style, user_profile)
+├── squirrel.db                 # Global memories (lesson, fact, profile with scope=global)
 └── logs/                       # Daemon logs
 
 <repo>/.sqrl/
-├── squirrel.db                 # Project SQLite (project memories)
+├── squirrel.db                 # Project memories (lesson, fact with scope=project)
 └── config.toml                 # Project overrides (optional)
 ```
 
-### Database Layers
+### 2-Layer Database Architecture
 
-| Layer | Location | Contents |
-|-------|----------|----------|
-| **User** | `~/.sqrl/squirrel.db` | user_style, user_profile |
-| **Project** | `<project>/.sqrl/squirrel.db` | project_fact, pitfall, recipe |
+| Layer | DB File | Contents |
+|-------|---------|----------|
+| **Global** | `~/.sqrl/squirrel.db` | lesson, fact, profile (scope=global) |
+| **Project** | `<repo>/.sqrl/squirrel.db` | lesson, fact (scope=project) |
 
 ## Configuration
 
 ```toml
 # ~/.sqrl/config.toml
+
+[agents]
+claude_code = true                # Enable Claude Code integration
+codex_cli = true                  # Enable Codex CLI integration
+gemini_cli = false                # Enable Gemini CLI integration
+cursor = true                     # Enable Cursor integration
+
 [llm]
 provider = "gemini"               # gemini | openai | anthropic | ollama | ...
 api_key = "..."
@@ -235,6 +404,10 @@ base_url = ""                     # Optional, for local models (Ollama, LMStudio
 # 2-tier model design
 strong_model = "gemini-2.5-pro"   # Complex reasoning (episode ingestion)
 fast_model = "gemini-3-flash"     # Fast tasks (context compose, CLI, dedup)
+
+[embedding]
+provider = "openai"               # openai | gemini | cohere | ...
+model = "text-embedding-3-small"  # 1536-dim, $0.10/M tokens
 
 [daemon]
 idle_timeout_hours = 2            # Stop after N hours inactive
@@ -267,7 +440,7 @@ Squirrel/
 │       ├── server.py           # Unix socket IPC server
 │       ├── agent.py            # Unified agent with tools
 │       ├── tools/              # Tool implementations
-│       ├── embeddings.py       # ONNX embeddings
+│       ├── embeddings.py       # API embeddings (OpenAI, etc.)
 │       └── retrieval.py        # Similarity search
 │
 └── docs/
@@ -304,22 +477,32 @@ source .venv/bin/activate && pytest
 
 ## v1 Scope
 
-**In:**
 - Passive log watching (4 CLIs)
-- Success detection (SUCCESS/FAILURE/UNCERTAIN classification)
+- Episode segmentation (EXECUTION_TASK / PLANNING_DECISION / RESEARCH_LEARNING / DISCUSSION)
+- Success detection for EXECUTION_TASK only (with evidence requirement)
+- 3 memory types (lesson, fact, profile) with scope flag
+- Declarative keys for facts (project.* and user.*) with deterministic conflict detection
+- Evidence source tracking for facts (success/failure/neutral/manual)
+- Memory lifecycle: status (active/inactive/invalidated) + validity tracking
+- Fact contradiction detection (declarative key match + LLM for free-text)
+- Soft delete (`sqrl forget`) - recoverable
 - Unified Python agent with tools
 - Natural language CLI
 - MCP integration (2 tools)
 - Lazy daemon (start on demand, stop after 2hr idle)
 - Retroactive log ingestion on init (token-limited)
-- 4 memory types + user_profile
 - Near-duplicate deduplication (0.9 threshold)
 - Cross-platform (Mac, Linux, Windows)
-- `sqrl update` command
+- Export/import memories (JSON)
+- Auto-update (`sqrl update`)
+- CLI selection + MCP wiring + agent instruction injection
+- `sqrl sync` for updating existing projects with new CLIs
 
-**v1.1:** Auto-update, memory consolidation, retrieval debugging tools
+**v1 limitations:**
+- No TTL/auto-expiration
+- No hard delete (soft delete only)
 
-**v2:** Hooks output, file injection (AGENTS.md/GEMINI.md), cloud sync, team sharing
+**v2:** Team/cloud sync, deep CLI integrations, TTL/temporary memory, hard purge, memory linking
 
 ## Contributing
 
