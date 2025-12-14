@@ -13,6 +13,13 @@ from sqrl.embeddings import (
     make_embedding_getter,
 )
 from sqrl.ingest import IngestPipeline, IngestResult
+from sqrl.ipc import (
+    EmbedTextHandler,
+    IngestChunkHandler,
+    IPCServer,
+    SearchMemoriesHandler,
+    start_server,
+)
 from sqrl.memory_writer import MemoryWriter, MemoryWriterConfig, MemoryWriterOutput
 from sqrl.retrieval import MemoryStore, RetrievalResult, Retriever
 
@@ -32,6 +39,12 @@ __all__ = [
     # Ingest
     "IngestPipeline",
     "IngestResult",
+    # IPC Server
+    "IPCServer",
+    "start_server",
+    "IngestChunkHandler",
+    "EmbedTextHandler",
+    "SearchMemoriesHandler",
     # Memory Writer
     "MemoryWriter",
     "MemoryWriterConfig",
