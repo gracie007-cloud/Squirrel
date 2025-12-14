@@ -31,6 +31,9 @@ pub enum Error {
     #[error("Watcher error: {0}")]
     Watcher(String),
 
+    #[error("MCP error: {0}")]
+    Mcp(String),
+
     #[error("{0}")]
     Other(String),
 }
