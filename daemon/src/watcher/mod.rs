@@ -204,7 +204,6 @@ impl LogWatcher {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
 
     #[tokio::test]
     async fn test_log_watcher_creation() {
