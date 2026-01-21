@@ -14,7 +14,7 @@ async def main():
             {
                 "ts": "2024-12-10T10:00:00Z",
                 "role": "user",
-                "content_summary": "asked to call Stripe API using requests",
+                "content_summary": "help me call the Stripe API",
             },
             {
                 "ts": "2024-12-10T10:01:00Z",
@@ -29,7 +29,7 @@ async def main():
             {
                 "ts": "2024-12-10T10:02:00Z",
                 "role": "user",
-                "content_summary": "said: just use httpx instead, requests always has SSL issues",
+                "content_summary": "no, use httpx not requests! SSL issues here",
             },
             {
                 "ts": "2024-12-10T10:03:00Z",

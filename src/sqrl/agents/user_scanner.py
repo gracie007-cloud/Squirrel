@@ -1,10 +1,9 @@
 """PROMPT-001: User Scanner agent."""
 
+import json
 import os
 
-from pydantic_ai import Agent
-from pydantic_ai.models.openai import OpenAIModel
-from pydantic_ai.providers.openai import OpenAIProvider
+from openai import AsyncOpenAI
 
 from sqrl.models.extraction import ScannerOutput
 
@@ -14,34 +13,21 @@ Look for signals like corrections, frustration, or preference statements.
 
 Skip messages that are just acknowledgments ("ok", "sure", "continue", "looks good").
 
-OUTPUT (JSON only):
-{
-  "needs_context": true | false,
-  "trigger_index": <index of the message that triggered, or null if needs_context is false>
-}"""
-
-
-def _get_model() -> OpenAIModel:
-    """Get model configured for OpenRouter."""
-    model_name = os.getenv("SQRL_CHEAP_MODEL", "google/gemini-2.0-flash-001")
-    api_key = os.getenv("OPENROUTER_API_KEY")
-    provider = OpenAIProvider(
-        base_url="https://openrouter.ai/api/v1",
-        api_key=api_key,
-    )
-    return OpenAIModel(model_name, provider=provider)
+Output JSON only:
+{"needs_context": true, "trigger_index": 1}
+or
+{"needs_context": false, "trigger_index": null}"""
 
 
 class UserScanner:
-    """User Scanner agent using PydanticAI."""
+    """User Scanner using raw OpenAI client."""
 
     def __init__(self) -> None:
-        self.agent = Agent(
-            model=_get_model(),
-            system_prompt=SYSTEM_PROMPT,
-            output_type=ScannerOutput,
-            retries=3,
+        self.client = AsyncOpenAI(
+            base_url="https://openrouter.ai/api/v1",
+            api_key=os.getenv("OPENROUTER_API_KEY"),
         )
+        self.model = os.getenv("SQRL_CHEAP_MODEL", "google/gemini-2.0-flash-001")
 
     async def scan(self, user_messages: list[str]) -> ScannerOutput:
         """Scan user messages for correction signals."""
@@ -53,5 +39,23 @@ class UserScanner:
 
 Does any message indicate a correction or preference? Return JSON only."""
 
-        result = await self.agent.run(user_prompt)
-        return result.output
+        response = await self.client.chat.completions.create(
+            model=self.model,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ],
+        )
+
+        content = response.choices[0].message.content or "{}"
+        # Extract JSON from response
+        if "```json" in content:
+            content = content.split("```json")[1].split("```")[0]
+        elif "```" in content:
+            content = content.split("```")[1].split("```")[0]
+
+        try:
+            data = json.loads(content.strip())
+            return ScannerOutput(**data)
+        except (json.JSONDecodeError, ValueError):
+            return ScannerOutput(needs_context=False)
