@@ -12,71 +12,50 @@ from sqrl.models.extraction import ExtractorOutput
 
 SYSTEM_PROMPT = """You are the Memory Extractor for Squirrel, a coding memory system.
 
-You receive corrections where a user corrected the AI. Your job: classify each correction.
+You receive a user message that may contain a correction, along with recent AI context.
 
 ## Two Types of Memories
 
 ### 1. User Styles (Global Preferences)
 Preferences that apply to ALL projects. Synced to agent.md files automatically.
 
-Examples:
-- "never use emoji"
-- "prefer async/await over callbacks"
-- "be concise, no lengthy explanations"
-- "always use TypeScript, not JavaScript"
+### 2. Project Memories (Project-Specific)
+Knowledge specific to THIS project. User triggers via MCP when needed.
 
-Signals that indicate User Style:
-- User says "always", "never", "I prefer", "I hate"
-- User corrects AI behavior/communication style
-- Applies regardless of project
-
-### 2. Project Memories (Project-Specific AI Mistakes)
-Mistakes the AI made in THIS specific project. User triggers via MCP when needed.
-
-Examples:
-- "use httpx not requests (SSL issues in this environment)"
-- "this API needs timeout set to 30s"
-- "tests must run with --no-cache flag"
-
-Signals that indicate Project Memory:
-- Technical issue specific to this codebase/environment
-- User corrects AI's technical choice for this project
-- Would NOT apply to other projects
-
-## Decision Flow
-1. Did user correct AI? (already filtered by Log Cleaner)
-2. Is this about user's general preference? → User Style
-3. Is this about this project's technical specifics? → Project Memory
-4. Not sure? → Project Memory (safer default)
+## Decision
+- User's general preference? → User Style
+- Project-specific technical issue? → Project Memory
+- Not sure? → Project Memory (safer default)
+- Not worth remembering? → Return empty arrays
 
 ## Operations
 
 | Op | When to Use |
 |----|-------------|
-| ADD | New correction not in existing memories |
-| UPDATE | Correction modifies existing memory (provide target_id) |
-| DELETE | Existing memory is now wrong (provide target_id) |
+| ADD | New memory not in existing |
+| UPDATE | Modifies existing (provide target_id) |
+| DELETE | Existing is now wrong (provide target_id) |
 
 ## Output Format (JSON only)
 
 {
   "user_styles": [
-    { "op": "ADD", "text": "preference description" },
-    { "op": "UPDATE", "target_id": "id", "text": "updated preference" },
+    { "op": "ADD", "text": "preference" },
+    { "op": "UPDATE", "target_id": "id", "text": "updated" },
     { "op": "DELETE", "target_id": "id" }
   ],
   "project_memories": [
-    { "op": "ADD", "category": "frontend|backend|docs_test|other", "text": "..." },
-    { "op": "UPDATE", "target_id": "id", "text": "updated memory" },
+    { "op": "ADD", "category": "frontend|backend|docs_test|other", "text": "memory" },
+    { "op": "UPDATE", "target_id": "id", "text": "updated" },
     { "op": "DELETE", "target_id": "id" }
   ]
 }
 
-If the correction doesn't warrant a memory, return empty arrays:
+If not worth remembering:
 {
   "user_styles": [],
   "project_memories": [],
-  "skip_reason": "why no memory needed"
+  "skip_reason": "why"
 }"""
 
 
@@ -106,11 +85,12 @@ class MemoryExtractor:
         self,
         project_id: str,
         project_root: str,
-        correction_context: str,
+        trigger_message: str,
+        ai_context: str,
         existing_user_styles: list[ExistingUserStyle],
         existing_project_memories: list[ExistingProjectMemory],
     ) -> ExtractorOutput:
-        """Extract memories from user correction."""
+        """Extract memories from user message with AI context."""
         styles_json = json.dumps(
             [{"id": s.id, "text": s.text} for s in existing_user_styles],
             indent=2,
@@ -137,10 +117,13 @@ EXISTING USER STYLES:
 EXISTING PROJECT MEMORIES:
 {memories_json}
 
-USER CORRECTION:
-{correction_context}
+AI CONTEXT (3 turns before trigger):
+{ai_context}
 
-Classify this correction. Return JSON only."""
+USER MESSAGE (trigger):
+{trigger_message}
+
+Extract memories if worth remembering. Return JSON only."""
 
         result = await self.agent.run(user_prompt)
         return result.output

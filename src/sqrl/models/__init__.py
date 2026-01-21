@@ -7,10 +7,10 @@ from sqrl.models.episode import (
     ProcessEpisodeRequest,
 )
 from sqrl.models.extraction import (
-    CleanerOutput,
     ExtractorOutput,
     MemoryOperation,
     ProjectMemoryOp,
+    ScannerOutput,
     UserStyleOp,
 )
 from sqrl.models.response import ProcessEpisodeResponse
@@ -20,7 +20,7 @@ __all__ = [
     "ExistingUserStyle",
     "ExistingProjectMemory",
     "ProcessEpisodeRequest",
-    "CleanerOutput",
+    "ScannerOutput",
     "ExtractorOutput",
     "MemoryOperation",
     "ProjectMemoryOp",

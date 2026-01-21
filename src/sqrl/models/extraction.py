@@ -6,12 +6,11 @@ from typing import Optional
 from pydantic import BaseModel
 
 
-class CleanerOutput(BaseModel):
-    """PROMPT-001: Log Cleaner output."""
+class ScannerOutput(BaseModel):
+    """PROMPT-001: User Scanner output."""
 
-    skip: bool
-    skip_reason: Optional[str] = None
-    correction_context: Optional[str] = None
+    needs_context: bool
+    trigger_index: Optional[int] = None
 
 
 class MemoryOperation(str, Enum):
