@@ -74,11 +74,18 @@ Daemon → Memory Service. Process episode events, extract memories.
       }
     ],
     "existing_user_styles": [
-      "Prefer async/await over callbacks",
-      "Never use emoji"
+      {
+        "id": "style-1",
+        "text": "Prefer async/await over callbacks"
+      },
+      {
+        "id": "style-2",
+        "text": "Never use emoji"
+      }
     ],
     "existing_project_memories": [
       {
+        "id": "mem-1",
         "category": "backend",
         "subcategory": "main",
         "text": "Use httpx as HTTP client"
@@ -111,7 +118,7 @@ Daemon → Memory Service. Process episode events, extract memories.
       },
       {
         "op": "UPDATE",
-        "target_text": "Use httpx as HTTP client",
+        "target_id": "mem-1",
         "new_text": "Use httpx as HTTP client. requests causes SSL errors."
       }
     ]
@@ -129,41 +136,12 @@ Daemon → Memory Service. Process episode events, extract memories.
 | DELETE | Remove outdated memory |
 
 **Model Pipeline:**
-1. Log Cleaner (cheap model) - compress, decide if worth processing
-2. Memory Extractor (strong model) - extract user styles + project memories
+1. Log Cleaner (gemini-3.0-flash) - compress, decide if worth processing
+2. Memory Extractor (gemini-3.0-flash) - extract user styles + project memories
 
 ---
 
-### IPC-002: embed_text
-
-Daemon → Memory Service. Generate embedding vector.
-
-**Request:**
-```json
-{
-  "jsonrpc": "2.0",
-  "method": "embed_text",
-  "params": {
-    "text": "HTTP client SSL configuration"
-  },
-  "id": 2
-}
-```
-
-**Response:**
-```json
-{
-  "jsonrpc": "2.0",
-  "result": {
-    "embedding": [0.123, -0.456, 0.789, ...]
-  },
-  "id": 2
-}
-```
-
----
-
-### IPC-003: sync_user_style
+### IPC-002: sync_user_style
 
 Memory Service → Daemon. Sync user style to agent.md files.
 
