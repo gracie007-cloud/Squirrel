@@ -5,10 +5,12 @@ from typing import Any
 
 import structlog
 
-from sqrl.agents import MemoryExtractor, ProjectSummarizer, UserScanner
+from sqrl.agents import MemoryExtractor, ProjectSummarizer, UserScanner, sync_user_styles
+from sqrl.cache import get_project_summary, set_project_summary
 from sqrl.models import ProcessEpisodeRequest, ProcessEpisodeResponse
 from sqrl.models.episode import EpisodeEvent
 from sqrl.models.extraction import ProjectMemoryOp, UserStyleOp
+from sqrl.storage import ProjectMemoryStorage, UserStyleStorage
 
 log = structlog.get_logger()
 
@@ -88,11 +90,16 @@ async def handle_process_episode(params: dict[str, Any]) -> dict[str, Any]:
 
     log.info("patterns_detected", indices=scanner_output.indices)
 
-    # Stage 0: Get project summary for context
-    summarizer = ProjectSummarizer()
-    project_summary = await summarizer.summarize(request.project_root)
+    # Stage 0: Get project summary for context (cached)
+    project_summary = get_project_summary(request.project_root)
     if project_summary:
-        log.info("project_summary_generated", length=len(project_summary))
+        log.info("project_summary_cached", length=len(project_summary))
+    else:
+        summarizer = ProjectSummarizer()
+        project_summary = await summarizer.summarize(request.project_root)
+        if project_summary:
+            set_project_summary(request.project_root, project_summary)
+            log.info("project_summary_generated", length=len(project_summary))
 
     # Stage 2: Memory Extractor - process each flagged message
     all_user_styles: list[UserStyleOp] = []
@@ -120,6 +127,26 @@ async def handle_process_episode(params: dict[str, Any]) -> dict[str, Any]:
 
         all_user_styles.extend(extractor_output.user_styles)
         all_project_memories.extend(extractor_output.project_memories)
+
+    # Persist extracted memories to SQLite
+    if all_user_styles:
+        user_storage = UserStyleStorage()
+        for style in all_user_styles:
+            if style.text:
+                user_storage.add(style.text)
+        log.info("user_styles_stored", count=len(all_user_styles))
+
+        # Sync to agent.md files
+        sync_results = sync_user_styles(request.project_root)
+        synced_files = [f for f, ok in sync_results.items() if ok]
+        log.info("user_styles_synced", files=synced_files)
+
+    if all_project_memories:
+        project_storage = ProjectMemoryStorage(request.project_root)
+        for memory in all_project_memories:
+            if memory.text:
+                project_storage.add(memory.category, memory.text)
+        log.info("project_memories_stored", count=len(all_project_memories))
 
     log.info(
         "process_episode_done",
