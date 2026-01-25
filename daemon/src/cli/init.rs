@@ -7,12 +7,14 @@ use tracing::{info, warn};
 
 use crate::cli::service;
 use crate::error::Error;
+use crate::ipc::IpcClient;
+use crate::watcher;
 
 /// Default history to process (30 days).
 const DEFAULT_HISTORY_DAYS: u32 = 30;
 
 /// Run the init command.
-pub async fn run(process_history: bool) -> Result<(), Error> {
+pub async fn run(with_history: bool) -> Result<(), Error> {
     let project_root = std::env::current_dir()?;
     let sqrl_dir = project_root.join(".sqrl");
 
@@ -45,15 +47,28 @@ pub async fn run(process_history: bool) -> Result<(), Error> {
 
     println!("Squirrel initialized.");
 
-    if process_history {
+    if with_history {
         println!(
             "Processing last {} days of history...",
             DEFAULT_HISTORY_DAYS
         );
-        // TODO: Implement history processing
-        // This would scan ~/.claude/projects/ for sessions related to this project
-        // and process them chronologically
-        println!("(History processing not yet implemented)");
+
+        // Connect to Python Memory Service
+        let ipc_client = IpcClient::default();
+        if ipc_client.is_service_running().await {
+            match watcher::process_history(&project_root, DEFAULT_HISTORY_DAYS, &ipc_client).await {
+                Ok(stats) => {
+                    println!("{}", stats);
+                }
+                Err(e) => {
+                    warn!(error = %e, "Failed to process history");
+                    println!("Warning: Could not process history: {}", e);
+                }
+            }
+        } else {
+            println!("Warning: Memory Service not running.");
+            println!("History will be processed when you run 'sqrl init' again with the service running.");
+        }
     }
 
     // Install and start the system service
