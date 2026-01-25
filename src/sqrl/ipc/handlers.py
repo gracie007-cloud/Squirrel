@@ -90,6 +90,25 @@ async def handle_process_episode(params: dict[str, Any]) -> dict[str, Any]:
 
     log.info("patterns_detected", indices=scanner_output.indices)
 
+    # Load existing memories from storage (for deduplication and updates)
+    user_storage = UserStyleStorage()
+    existing_user_styles = [
+        {"id": s.id, "text": s.text}
+        for s in user_storage.get_all()
+    ]
+
+    project_storage = ProjectMemoryStorage(request.project_root)
+    existing_project_memories = [
+        {"id": m.id, "category": m.category, "subcategory": m.subcategory, "text": m.text}
+        for m in project_storage.get_all()
+    ]
+
+    log.info(
+        "existing_memories_loaded",
+        user_styles=len(existing_user_styles),
+        project_memories=len(existing_project_memories),
+    )
+
     # Stage 0: Get project summary for context (cached)
     project_summary = get_project_summary(request.project_root)
     if project_summary:
@@ -119,8 +138,8 @@ async def handle_process_episode(params: dict[str, Any]) -> dict[str, Any]:
             project_root=request.project_root,
             trigger_message=trigger_message,
             ai_context=ai_context,
-            existing_user_styles=request.existing_user_styles,
-            existing_project_memories=request.existing_project_memories,
+            existing_user_styles=existing_user_styles,
+            existing_project_memories=existing_project_memories,
             project_summary=project_summary,
             apply_confidence_filter=True,  # Filter by confidence > 0.8
         )
@@ -128,9 +147,8 @@ async def handle_process_episode(params: dict[str, Any]) -> dict[str, Any]:
         all_user_styles.extend(extractor_output.user_styles)
         all_project_memories.extend(extractor_output.project_memories)
 
-    # Persist extracted memories to SQLite
+    # Persist extracted memories to SQLite (using already-initialized storage)
     if all_user_styles:
-        user_storage = UserStyleStorage()
         for style in all_user_styles:
             if style.text:
                 user_storage.add(style.text)
@@ -142,7 +160,6 @@ async def handle_process_episode(params: dict[str, Any]) -> dict[str, Any]:
         log.info("user_styles_synced", files=synced_files)
 
     if all_project_memories:
-        project_storage = ProjectMemoryStorage(request.project_root)
         for memory in all_project_memories:
             if memory.text:
                 project_storage.add(memory.category, memory.text)
