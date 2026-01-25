@@ -42,6 +42,10 @@ clap = { version = "4", features = ["derive"] }
 # SQLite
 rusqlite = { version = "0.31", features = ["bundled"] }
 
+# Pattern matching
+glob = "0.3"
+regex = "1"
+
 # Web server (dashboard)
 axum = "0.7"
 tower-http = { version = "0.5", features = ["fs", "cors"] }

@@ -47,9 +47,33 @@ pub fn run() -> Result<i32, Error> {
         project_count, user_count
     );
 
+    // Doc debt status
+    let debts = storage::get_unresolved_doc_debt(&project_root).unwrap_or_default();
+    if debts.is_empty() {
+        println!("  Doc debt: none");
+    } else {
+        println!(
+            "  Doc debt: {} commit{}",
+            debts.len(),
+            if debts.len() == 1 { "" } else { "s" }
+        );
+    }
+
     // Last activity (from config file modification time)
     if let Some(last_activity) = get_last_activity(&sqrl_dir) {
         println!("  Last activity: {}", last_activity);
+    }
+
+    // Show doc debt details if any
+    if !debts.is_empty() {
+        println!();
+        println!("Doc Debt:");
+        for debt in &debts {
+            let short_sha = &debt.commit_sha[..7.min(debt.commit_sha.len())];
+            let msg = debt.commit_message.as_deref().unwrap_or("(no message)");
+            println!("  {} {}", short_sha, msg);
+            println!("    Expected: {}", debt.expected_docs.join(", "));
+        }
     }
 
     if !daemon_running {
