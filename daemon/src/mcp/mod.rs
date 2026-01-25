@@ -1,7 +1,7 @@
 //! MCP (Model Context Protocol) server for AI tools.
 //!
 //! Implements MCP-001: squirrel_get_memory tool.
-//! Implements MCP-002: squirrel_get_doc_debt tool.
+//! Implements MCP-003: squirrel_get_doc_debt tool.
 
 use std::io::{BufRead, Write};
 use std::path::Path;
