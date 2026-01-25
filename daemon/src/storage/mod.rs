@@ -115,6 +115,87 @@ pub fn get_project_memories_grouped(
     Ok(grouped)
 }
 
+/// Add a new user style.
+pub fn add_user_style(text: &str) -> Result<String, Error> {
+    let db_path = user_styles_db_path()?;
+    let conn = Connection::open(&db_path)?;
+
+    // Ensure table exists
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS user_styles (
+            id TEXT PRIMARY KEY,
+            text TEXT NOT NULL,
+            use_count INTEGER DEFAULT 0
+        )",
+        [],
+    )?;
+
+    let id = uuid::Uuid::new_v4().to_string();
+    conn.execute(
+        "INSERT INTO user_styles (id, text, use_count) VALUES (?1, ?2, 0)",
+        [&id, text],
+    )?;
+
+    Ok(id)
+}
+
+/// Delete a user style by ID.
+pub fn delete_user_style(id: &str) -> Result<bool, Error> {
+    let db_path = user_styles_db_path()?;
+    if !db_path.exists() {
+        return Ok(false);
+    }
+
+    let conn = Connection::open(&db_path)?;
+    let deleted = conn.execute("DELETE FROM user_styles WHERE id = ?1", [id])?;
+
+    Ok(deleted > 0)
+}
+
+/// Add a new project memory.
+pub fn add_project_memory(
+    project_root: &Path,
+    category: &str,
+    subcategory: &str,
+    text: &str,
+) -> Result<String, Error> {
+    let db_path = project_memories_db_path(project_root);
+    let conn = Connection::open(&db_path)?;
+
+    // Ensure table exists
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS project_memories (
+            id TEXT PRIMARY KEY,
+            category TEXT NOT NULL,
+            subcategory TEXT NOT NULL,
+            text TEXT NOT NULL,
+            use_count INTEGER DEFAULT 0
+        )",
+        [],
+    )?;
+
+    let id = uuid::Uuid::new_v4().to_string();
+    conn.execute(
+        "INSERT INTO project_memories (id, category, subcategory, text, use_count) VALUES (?1, ?2, ?3, ?4, 0)",
+        [&id, category, subcategory, text],
+    )?;
+
+    Ok(id)
+}
+
+/// Delete a project memory by ID.
+pub fn delete_project_memory(project_root: &Path, id: &str) -> Result<bool, Error> {
+    let db_path = project_memories_db_path(project_root);
+    if !db_path.exists() {
+        return Ok(false);
+    }
+
+    let conn = Connection::open(&db_path)?;
+    let deleted = conn.execute("DELETE FROM project_memories WHERE id = ?1", [id])?;
+
+    Ok(deleted > 0)
+}
+
 /// Format project memories as markdown (for MCP response).
 pub fn format_memories_as_markdown(project_root: &Path) -> Result<String, Error> {
     let grouped = get_project_memories_grouped(project_root)?;

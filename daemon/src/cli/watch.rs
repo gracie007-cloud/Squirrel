@@ -1,6 +1,6 @@
 //! Watch daemon - watches Claude Code logs and sends episodes to Python service.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use tokio::time::sleep;
@@ -8,7 +8,9 @@ use tracing::{error, info, warn};
 
 use crate::dashboard;
 use crate::error::Error;
+use crate::ipc::types::{ExistingProjectMemory, ExistingUserStyle};
 use crate::ipc::{IpcClient, ProcessEpisodeRequest};
+use crate::storage;
 use crate::watcher::{
     CompletedSession, FileWatcher, LogParser, PositionStore, SessionTracker, WatchEvent,
 };
@@ -131,13 +133,16 @@ async fn send_to_service(client: &IpcClient, session: CompletedSession) {
         "Sending session to Memory Service"
     );
 
+    // Fetch existing memories for deduplication
+    let existing_user_styles = fetch_existing_user_styles();
+    let existing_project_memories = fetch_existing_project_memories(&session.project_root);
+
     let request = ProcessEpisodeRequest {
         project_id: session.project_id,
         project_root: session.project_root,
         events: session.events,
-        // TODO: Fetch existing styles and memories from storage
-        existing_user_styles: vec![],
-        existing_project_memories: vec![],
+        existing_user_styles,
+        existing_project_memories,
     };
 
     match client.process_episode(request).await {
@@ -157,6 +162,43 @@ async fn send_to_service(client: &IpcClient, session: CompletedSession) {
         }
         Err(e) => {
             error!(error = %e, "Failed to send episode to Memory Service");
+        }
+    }
+}
+
+/// Fetch existing user styles from storage.
+fn fetch_existing_user_styles() -> Vec<ExistingUserStyle> {
+    match storage::get_user_styles() {
+        Ok(styles) => styles
+            .into_iter()
+            .map(|s| ExistingUserStyle {
+                id: s.id,
+                text: s.text,
+            })
+            .collect(),
+        Err(e) => {
+            warn!(error = %e, "Failed to fetch user styles");
+            vec![]
+        }
+    }
+}
+
+/// Fetch existing project memories from storage.
+fn fetch_existing_project_memories(project_root: &str) -> Vec<ExistingProjectMemory> {
+    let path = Path::new(project_root);
+    match storage::get_project_memories(path) {
+        Ok(memories) => memories
+            .into_iter()
+            .map(|m| ExistingProjectMemory {
+                id: m.id,
+                category: m.category,
+                subcategory: m.subcategory,
+                text: m.text,
+            })
+            .collect(),
+        Err(e) => {
+            warn!(error = %e, "Failed to fetch project memories");
+            vec![]
         }
     }
 }

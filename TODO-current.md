@@ -6,24 +6,11 @@ Existing bugs and incomplete features from previous session.
 
 ## Bugs
 
-### BUG-001: Deduplication Not Working
+### BUG-001: Deduplication Not Working - ✅ FIXED
 
-**Location:** `daemon/src/cli/watch.rs:138-140`
+**Location:** `daemon/src/cli/watch.rs`
 
-**Problem:** `send_to_service` passes empty arrays for `existing_user_styles` and `existing_project_memories`. Python service cannot deduplicate.
-
-```rust
-let request = ProcessEpisodeRequest {
-    // ...
-    // TODO: Fetch existing styles and memories from storage
-    existing_user_styles: vec![],
-    existing_project_memories: vec![],
-};
-```
-
-**Fix:** Query SQLite storage before sending to Python service.
-
-**Priority:** High (causes duplicate memories)
+**Fix:** Added `fetch_existing_user_styles()` and `fetch_existing_project_memories()` functions that query SQLite storage before sending to Python service.
 
 ---
 
@@ -43,27 +30,23 @@ let request = ProcessEpisodeRequest {
 
 ## Incomplete Features
 
-### INCOMPLETE-001: Dashboard Storage Operations
+### INCOMPLETE-001: Dashboard Storage Operations - ✅ FIXED
 
-**Location:** `daemon/src/dashboard/api.rs`
+Added to `storage/mod.rs`:
+- `add_user_style(text)`
+- `delete_user_style(id)`
+- `add_project_memory(project_root, category, subcategory, text)`
+- `delete_project_memory(project_root, id)`
 
-**Problem:** API handlers exist but may not have full CRUD for:
-- Add user style (needs storage.add_style)
-- Delete user style (needs storage.delete_style)
-- Add project memory
-- Delete project memory
-
-**Fix:** Implement storage operations in `daemon/src/storage/` and wire to API.
+Wired to API handlers.
 
 ---
 
-### INCOMPLETE-002: Project Listing
+### INCOMPLETE-002: Project Listing - ✅ FIXED
 
-**Location:** `daemon/src/dashboard/api.rs` - `list_projects` handler
-
-**Problem:** Need to scan for `.sqrl/` directories to list initialized projects.
-
-**Fix:** Implement project discovery logic.
+Added `discover_projects()` function that scans:
+- Current directory
+- ~/projects, ~/dev, ~/code, ~/src, ~/repos, ~/workspace
 
 ---
 

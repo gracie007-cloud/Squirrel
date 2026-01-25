@@ -72,15 +72,18 @@ struct AddStyleRequest {
 }
 
 async fn add_style(Json(req): Json<AddStyleRequest>) -> StatusCode {
-    // TODO: Implement add style to storage
-    let _ = req.text;
-    StatusCode::CREATED
+    match storage::add_user_style(&req.text) {
+        Ok(_) => StatusCode::CREATED,
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    }
 }
 
 async fn delete_style(Path(id): Path<String>) -> StatusCode {
-    // TODO: Implement delete style from storage
-    let _ = id;
-    StatusCode::NO_CONTENT
+    match storage::delete_user_style(&id) {
+        Ok(true) => StatusCode::NO_CONTENT,
+        Ok(false) => StatusCode::NOT_FOUND,
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    }
 }
 
 // === Projects ===
@@ -93,8 +96,70 @@ struct ProjectResponse {
 }
 
 async fn list_projects() -> Json<Vec<ProjectResponse>> {
-    // TODO: Implement project listing (scan for .sqrl directories)
-    Json(vec![])
+    let projects = discover_projects();
+    Json(projects)
+}
+
+/// Discover projects by scanning common locations for .sqrl directories.
+fn discover_projects() -> Vec<ProjectResponse> {
+    let mut projects = Vec::new();
+
+    // Check current directory
+    if let Ok(cwd) = std::env::current_dir() {
+        if let Some(proj) = check_project_dir(&cwd) {
+            projects.push(proj);
+        }
+    }
+
+    // Check home directory common locations
+    if let Some(home) = dirs::home_dir() {
+        let search_dirs = [
+            home.join("projects"),
+            home.join("dev"),
+            home.join("code"),
+            home.join("src"),
+            home.join("repos"),
+            home.join("workspace"),
+        ];
+
+        for dir in search_dirs {
+            if dir.exists() {
+                if let Ok(entries) = std::fs::read_dir(&dir) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if path.is_dir() {
+                            if let Some(proj) = check_project_dir(&path) {
+                                projects.push(proj);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    projects
+}
+
+/// Check if a directory is a Squirrel project and return info.
+fn check_project_dir(path: &std::path::Path) -> Option<ProjectResponse> {
+    let sqrl_dir = path.join(".sqrl");
+    if !sqrl_dir.exists() {
+        return None;
+    }
+
+    let memory_count = storage::get_project_memories(path)
+        .map(|m| m.len())
+        .unwrap_or(0);
+
+    let id = path.to_string_lossy().replace('/', "-");
+    let path_str = path.to_string_lossy().to_string();
+
+    Some(ProjectResponse {
+        id,
+        path: path_str,
+        memory_count,
+    })
 }
 
 // === Project Memories ===
@@ -133,17 +198,34 @@ async fn list_memories(Path(id): Path<String>) -> Json<Vec<MemoryResponse>> {
 #[derive(Deserialize)]
 struct AddMemoryRequest {
     category: String,
+    #[serde(default)]
+    subcategory: String,
     text: String,
 }
 
 async fn add_memory(Path(id): Path<String>, Json(req): Json<AddMemoryRequest>) -> StatusCode {
-    // TODO: Implement add memory to storage
-    let _ = (id, req);
-    StatusCode::CREATED
+    let project_path = id.replace('-', "/");
+    let path = std::path::Path::new(&project_path);
+
+    let subcategory = if req.subcategory.is_empty() {
+        "main"
+    } else {
+        &req.subcategory
+    };
+
+    match storage::add_project_memory(path, &req.category, subcategory, &req.text) {
+        Ok(_) => StatusCode::CREATED,
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    }
 }
 
 async fn delete_memory(Path((id, mid)): Path<(String, String)>) -> StatusCode {
-    // TODO: Implement delete memory from storage
-    let _ = (id, mid);
-    StatusCode::NO_CONTENT
+    let project_path = id.replace('-', "/");
+    let path = std::path::Path::new(&project_path);
+
+    match storage::delete_project_memory(path, &mid) {
+        Ok(true) => StatusCode::NO_CONTENT,
+        Ok(false) => StatusCode::NOT_FOUND,
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    }
 }
