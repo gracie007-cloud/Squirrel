@@ -9,8 +9,8 @@ use tracing::info;
 
 use super::log_parser::{LogEntry, LogParser};
 
-/// Idle timeout for session boundaries.
-const IDLE_TIMEOUT_MINUTES: i64 = 30;
+/// Idle timeout for session boundaries (10 minutes).
+const IDLE_TIMEOUT_MINUTES: i64 = 10;
 
 /// Event in an episode, normalized for Python service.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -298,8 +298,8 @@ mod tests {
         // Fresh session should not be idle
         assert!(!session.is_idle());
 
-        // Set last activity to 31 minutes ago
-        session.last_activity = Utc::now() - Duration::minutes(31);
+        // Set last activity to 11 minutes ago (timeout is 10 min)
+        session.last_activity = Utc::now() - Duration::minutes(11);
         assert!(session.is_idle());
     }
 

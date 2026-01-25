@@ -46,6 +46,9 @@ enum Commands {
     /// Open configuration in browser
     Config,
 
+    /// Show Squirrel status
+    Status,
+
     /// Internal: run the watcher daemon (used by system service)
     #[command(hide = true)]
     WatchDaemon,
@@ -86,6 +89,12 @@ async fn main() -> Result<(), Error> {
         }
         Some(Commands::Config) => {
             cli::config::open()?;
+        }
+        Some(Commands::Status) => {
+            let exit_code = cli::status::run()?;
+            if exit_code != 0 {
+                std::process::exit(exit_code);
+            }
         }
         Some(Commands::WatchDaemon) => {
             cli::watch::run_daemon().await?;

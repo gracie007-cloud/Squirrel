@@ -309,7 +309,32 @@ Open configuration in browser.
 
 **Usage:** `sqrl config`
 
-**Action:** Opens Dashboard in default browser (`http://localhost:PORT/dashboard` or `https://app.sqrl.dev`).
+**Action:** Opens Dashboard in default browser (`http://localhost:9741`).
+
+---
+
+### CLI-007: sqrl status
+
+Show Squirrel status for current project.
+
+**Usage:** `sqrl status`
+
+**Output:**
+```
+Squirrel Status
+  Project: /home/user/myproject
+  Initialized: yes
+  Daemon: running
+  Memories: 12 project, 5 user styles
+  Last activity: 2 minutes ago
+```
+
+**Exit codes:**
+| Code | Meaning |
+|------|---------|
+| 0 | Project initialized, daemon running |
+| 1 | Project not initialized |
+| 2 | Project initialized, daemon not running |
 
 ---
 
@@ -389,6 +414,102 @@ DELETE /api/team/members/:id      # Remove member
 GET  /api/team/style              # Get team style
 PUT  /api/team/style              # Update team style
 ```
+
+---
+
+## Dashboard UI
+
+### UI-001: Design System
+
+**Color Palette:**
+
+| Role | Color | Usage |
+|------|-------|-------|
+| Background | `#FFFFFF` | Main background |
+| Surface | `#FAFAFA` | Cards, panels |
+| Border | `#E5E5E5` | Dividers, borders |
+| Text Primary | `#171717` | Headings, body |
+| Text Secondary | `#737373` | Labels, hints |
+| Accent | `#000000` | Buttons, links, focus |
+| Error | `#DC2626` | Error states only |
+| Success | `#16A34A` | Success states only |
+
+**Typography:**
+
+| Element | Font | Size | Weight |
+|---------|------|------|--------|
+| H1 | Inter | 24px | 600 |
+| H2 | Inter | 18px | 600 |
+| Body | Inter | 14px | 400 |
+| Label | Inter | 12px | 500 |
+| Mono | JetBrains Mono | 13px | 400 |
+
+**Components:**
+
+| Component | Style |
+|-----------|-------|
+| Buttons | Black fill, white text, 6px radius |
+| Inputs | White fill, 1px border, 6px radius |
+| Cards | White fill, 1px border, 8px radius, subtle shadow |
+| Tables | Minimal, no zebra striping, 1px bottom borders |
+
+**Principles:**
+- Minimal, clean aesthetic
+- High contrast for readability
+- No decorative elements
+- Generous whitespace
+- Black & white with color only for status indicators
+
+---
+
+### UI-002: Dashboard Pages
+
+**Layout:**
+```
+┌─────────────────────────────────────────────────────┐
+│  Squirrel                          [User] [Logout]  │
+├──────────────┬──────────────────────────────────────┤
+│              │                                      │
+│  User Styles │   [Content Area]                     │
+│  Projects    │                                      │
+│  Settings    │                                      │
+│              │                                      │
+└──────────────┴──────────────────────────────────────┘
+```
+
+**Pages:**
+
+| Page | Path | Content |
+|------|------|---------|
+| User Styles | `/styles` | List, add, edit, delete user styles |
+| Projects | `/projects` | List projects with memory counts |
+| Project Detail | `/projects/:id` | Memories grouped by category |
+| Settings | `/settings` | Daemon config, sync targets |
+
+---
+
+### UI-003: Dashboard Server
+
+**Port:** `9741` (default, configurable)
+
+**Tech Stack:**
+- Rust (axum) for API + static file serving
+- Vanilla JS or minimal framework for frontend
+- SQLite for data (same as daemon)
+
+**Endpoints:**
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/` | Serve dashboard SPA |
+| GET | `/api/status` | Daemon status |
+| GET | `/api/styles` | List user styles |
+| POST | `/api/styles` | Add user style |
+| DELETE | `/api/styles/:id` | Delete user style |
+| GET | `/api/projects` | List projects |
+| GET | `/api/projects/:id/memories` | List project memories |
+| POST | `/api/projects/:id/memories` | Add memory |
+| DELETE | `/api/projects/:id/memories/:mid` | Delete memory |
 
 ---
 
