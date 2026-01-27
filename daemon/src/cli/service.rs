@@ -1,10 +1,14 @@
 //! System service management (systemd/launchd).
+//!
+//! On Linux, uses systemd user sessions when available.
+//! Falls back to direct process spawning for WSL and other environments
+//! where systemd user sessions don't work.
 
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::error::Error;
 
@@ -23,6 +27,8 @@ fn get_binary_path() -> Result<PathBuf, Error> {
 #[cfg(target_os = "linux")]
 mod platform {
     use super::*;
+    use std::io::{BufRead, BufReader};
+    use std::os::unix::process::CommandExt;
 
     /// Get systemd user service directory.
     fn service_dir() -> Result<PathBuf, Error> {
@@ -33,6 +39,35 @@ mod platform {
     /// Get service file path.
     fn service_file() -> Result<PathBuf, Error> {
         Ok(service_dir()?.join(format!("{}.service", SERVICE_NAME)))
+    }
+
+    /// Get PID file path for fallback mode.
+    fn pid_file() -> Result<PathBuf, Error> {
+        let home = dirs::home_dir().ok_or(Error::HomeDirNotFound)?;
+        Ok(home.join(".sqrl/daemon.pid"))
+    }
+
+    /// Get log file path for fallback mode.
+    fn log_file() -> Result<PathBuf, Error> {
+        let home = dirs::home_dir().ok_or(Error::HomeDirNotFound)?;
+        Ok(home.join(".sqrl/daemon.log"))
+    }
+
+    /// Check if systemd user session is available.
+    fn is_systemd_available() -> bool {
+        // Check if we can communicate with systemd user session
+        // This is the most reliable check - try to actually list units
+        let output = Command::new("systemctl")
+            .args(["--user", "list-units", "--no-pager", "--plain"])
+            .output();
+
+        match output {
+            Ok(o) => {
+                // If it succeeds (exit 0) and produces output, systemd is available
+                o.status.success() && !o.stdout.is_empty()
+            }
+            Err(_) => false,
+        }
     }
 
     /// Generate systemd service unit file.
@@ -56,26 +91,22 @@ WantedBy=default.target
         )
     }
 
-    /// Install the systemd service.
-    pub fn install() -> Result<(), Error> {
+    /// Install the systemd service (only when systemd is available).
+    fn install_systemd() -> Result<(), Error> {
         let binary_path = get_binary_path()?;
         let service_dir = service_dir()?;
         let service_file = service_file()?;
 
-        // Create service directory if needed
         fs::create_dir_all(&service_dir)?;
 
-        // Write service file
         let content = generate_service_file(&binary_path);
         fs::write(&service_file, content)?;
         info!(path = %service_file.display(), "Created systemd service file");
 
-        // Reload systemd
         Command::new("systemctl")
             .args(["--user", "daemon-reload"])
             .output()?;
 
-        // Enable the service (auto-start on login)
         Command::new("systemctl")
             .args(["--user", "enable", SERVICE_NAME])
             .output()?;
@@ -84,35 +115,55 @@ WantedBy=default.target
         Ok(())
     }
 
-    /// Uninstall the systemd service.
-    pub fn uninstall() -> Result<(), Error> {
-        let service_file = service_file()?;
-
-        // Stop and disable
-        let _ = Command::new("systemctl")
-            .args(["--user", "stop", SERVICE_NAME])
-            .output();
-        let _ = Command::new("systemctl")
-            .args(["--user", "disable", SERVICE_NAME])
-            .output();
-
-        // Remove service file
-        if service_file.exists() {
-            fs::remove_file(&service_file)?;
-            info!(path = %service_file.display(), "Removed systemd service file");
-        }
-
-        // Reload systemd
-        Command::new("systemctl")
-            .args(["--user", "daemon-reload"])
-            .output()?;
-
-        info!("Systemd service uninstalled");
+    /// Install for fallback mode (just ensure directories exist).
+    fn install_fallback() -> Result<(), Error> {
+        let home = dirs::home_dir().ok_or(Error::HomeDirNotFound)?;
+        fs::create_dir_all(home.join(".sqrl"))?;
+        info!("Fallback mode: directories ready");
         Ok(())
     }
 
-    /// Start the service.
-    pub fn start() -> Result<(), Error> {
+    /// Install the service.
+    pub fn install() -> Result<(), Error> {
+        if is_systemd_available() {
+            install_systemd()
+        } else {
+            warn!("Systemd not available, using fallback process mode");
+            install_fallback()
+        }
+    }
+
+    /// Uninstall the systemd service.
+    pub fn uninstall() -> Result<(), Error> {
+        // Clean up systemd if it exists
+        let service_file = service_file()?;
+        if service_file.exists() {
+            let _ = Command::new("systemctl")
+                .args(["--user", "stop", SERVICE_NAME])
+                .output();
+            let _ = Command::new("systemctl")
+                .args(["--user", "disable", SERVICE_NAME])
+                .output();
+            fs::remove_file(&service_file)?;
+            info!(path = %service_file.display(), "Removed systemd service file");
+            let _ = Command::new("systemctl")
+                .args(["--user", "daemon-reload"])
+                .output();
+        }
+
+        // Clean up fallback mode
+        let _ = stop_fallback();
+        let pid = pid_file()?;
+        if pid.exists() {
+            let _ = fs::remove_file(&pid);
+        }
+
+        info!("Service uninstalled");
+        Ok(())
+    }
+
+    /// Start via systemd.
+    fn start_systemd() -> Result<(), Error> {
         let output = Command::new("systemctl")
             .args(["--user", "start", SERVICE_NAME])
             .output()?;
@@ -126,8 +177,66 @@ WantedBy=default.target
         Ok(())
     }
 
-    /// Stop the service.
-    pub fn stop() -> Result<(), Error> {
+    /// Start via fallback (spawn background process).
+    fn start_fallback() -> Result<(), Error> {
+        let binary_path = get_binary_path()?;
+        let pid_path = pid_file()?;
+        let log_path = log_file()?;
+
+        // Check if already running
+        if is_running_fallback()? {
+            info!("Daemon already running");
+            return Ok(());
+        }
+
+        // Ensure parent directory exists
+        if let Some(parent) = pid_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        // Open log file
+        let log = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_path)?;
+        let log_err = log.try_clone()?;
+
+        // Spawn the daemon as a background process
+        // Use setsid to create a new session (detach from terminal)
+        let child = unsafe {
+            Command::new(&binary_path)
+                .arg("watch-daemon")
+                .env("RUST_LOG", "sqrl=info")
+                .stdout(log)
+                .stderr(log_err)
+                .stdin(std::process::Stdio::null())
+                .pre_exec(|| {
+                    // Create new session to detach from terminal
+                    libc::setsid();
+                    Ok(())
+                })
+                .spawn()?
+        };
+
+        // Write PID file
+        fs::write(&pid_path, child.id().to_string())?;
+        info!(pid = child.id(), "Started daemon in fallback mode");
+
+        Ok(())
+    }
+
+    /// Start the service.
+    pub fn start() -> Result<(), Error> {
+        if is_systemd_available() && service_file()?.exists() {
+            start_systemd()
+        } else {
+            warn!("Using fallback process mode (systemd unavailable)");
+            start_fallback()
+        }
+    }
+
+    /// Stop via systemd.
+    fn stop_systemd() -> Result<(), Error> {
         let output = Command::new("systemctl")
             .args(["--user", "stop", SERVICE_NAME])
             .output()?;
@@ -141,8 +250,59 @@ WantedBy=default.target
         Ok(())
     }
 
-    /// Check if the service is running.
-    pub fn is_running() -> Result<bool, Error> {
+    /// Stop via fallback (kill process).
+    fn stop_fallback() -> Result<(), Error> {
+        let pid_path = pid_file()?;
+
+        if !pid_path.exists() {
+            return Ok(());
+        }
+
+        let pid_str = fs::read_to_string(&pid_path)?;
+        let pid: i32 = pid_str
+            .trim()
+            .parse()
+            .map_err(|_| Error::Ipc("Invalid PID in pid file".to_string()))?;
+
+        // Check if process is still running
+        let proc_path = PathBuf::from(format!("/proc/{}", pid));
+        if proc_path.exists() {
+            // Send SIGTERM
+            unsafe {
+                libc::kill(pid, libc::SIGTERM);
+            }
+            info!(pid = pid, "Sent SIGTERM to daemon");
+
+            // Wait briefly for graceful shutdown
+            std::thread::sleep(std::time::Duration::from_millis(500));
+
+            // Force kill if still running
+            if proc_path.exists() {
+                unsafe {
+                    libc::kill(pid, libc::SIGKILL);
+                }
+                warn!(pid = pid, "Force killed daemon");
+            }
+        }
+
+        // Remove PID file
+        let _ = fs::remove_file(&pid_path);
+        info!("Daemon stopped");
+
+        Ok(())
+    }
+
+    /// Stop the service.
+    pub fn stop() -> Result<(), Error> {
+        // Try both methods - one will work
+        if is_systemd_available() && service_file()?.exists() {
+            let _ = stop_systemd();
+        }
+        stop_fallback()
+    }
+
+    /// Check if running via systemd.
+    fn is_running_systemd() -> Result<bool, Error> {
         let output = Command::new("systemctl")
             .args(["--user", "is-active", SERVICE_NAME])
             .output()?;
@@ -150,9 +310,69 @@ WantedBy=default.target
         Ok(output.status.success())
     }
 
+    /// Check if running via fallback (PID file).
+    fn is_running_fallback() -> Result<bool, Error> {
+        let pid_path = pid_file()?;
+
+        if !pid_path.exists() {
+            return Ok(false);
+        }
+
+        let pid_str = fs::read_to_string(&pid_path)?;
+        let pid: i32 = match pid_str.trim().parse() {
+            Ok(p) => p,
+            Err(_) => {
+                // Invalid PID file, clean up
+                let _ = fs::remove_file(&pid_path);
+                return Ok(false);
+            }
+        };
+
+        // Check if process exists
+        let proc_path = PathBuf::from(format!("/proc/{}", pid));
+        if !proc_path.exists() {
+            // Process died, clean up PID file
+            let _ = fs::remove_file(&pid_path);
+            return Ok(false);
+        }
+
+        // Verify it's actually our daemon by checking cmdline
+        let cmdline_path = proc_path.join("cmdline");
+        if let Ok(file) = fs::File::open(&cmdline_path) {
+            let reader = BufReader::new(file);
+            if let Some(Ok(line)) = reader.lines().next() {
+                if line.contains("sqrl") && line.contains("watch-daemon") {
+                    return Ok(true);
+                }
+            }
+        }
+
+        // Process exists but might not be ours - assume it's stale
+        let _ = fs::remove_file(&pid_path);
+        Ok(false)
+    }
+
+    /// Check if the service is running.
+    pub fn is_running() -> Result<bool, Error> {
+        // Check systemd first
+        if is_systemd_available() {
+            if is_running_systemd()? {
+                return Ok(true);
+            }
+        }
+        // Check fallback mode
+        is_running_fallback()
+    }
+
     /// Check if the service is installed.
     pub fn is_installed() -> Result<bool, Error> {
-        Ok(service_file()?.exists())
+        // Either systemd service file exists, or fallback is set up
+        if service_file()?.exists() {
+            return Ok(true);
+        }
+        // In fallback mode, we're always "installed" if ~/.sqrl exists
+        let home = dirs::home_dir().ok_or(Error::HomeDirNotFound)?;
+        Ok(home.join(".sqrl").exists())
     }
 }
 
