@@ -1,6 +1,7 @@
 //! MCP (Model Context Protocol) server for AI tools.
 //!
 //! Implements MCP-001: squirrel_get_memory tool.
+//! Implements MCP-002: squirrel_get_docs_tree tool.
 //! Implements MCP-003: squirrel_get_doc_debt tool.
 
 use std::io::{BufRead, Write};
@@ -90,6 +91,20 @@ fn get_tools() -> Value {
             {
                 "name": "squirrel_get_doc_debt",
                 "description": "Get documentation debt for a project. Shows commits that changed code without updating expected docs.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "project_root": {
+                            "type": "string",
+                            "description": "Absolute path to project root"
+                        }
+                    },
+                    "required": ["project_root"]
+                }
+            },
+            {
+                "name": "squirrel_get_docs_tree",
+                "description": "Get project documentation structure. Use when starting work on a project to understand its documentation layout.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -193,6 +208,99 @@ fn handle_get_doc_debt(params: &Value) -> Result<Value, Error> {
     }))
 }
 
+/// Handle squirrel_get_docs_tree tool call.
+fn handle_get_docs_tree(params: &Value) -> Result<Value, Error> {
+    let project_root = params
+        .get("arguments")
+        .and_then(|a| a.get("project_root"))
+        .and_then(|p| p.as_str())
+        .ok_or_else(|| Error::Ipc("Missing project_root parameter".to_string()))?;
+
+    let path = Path::new(project_root);
+    if !path.exists() {
+        return Err(Error::Ipc(format!(
+            "Project root does not exist: {}",
+            project_root
+        )));
+    }
+
+    let markdown = scan_docs_tree(path);
+
+    Ok(json!({
+        "content": [
+            {
+                "type": "text",
+                "text": markdown
+            }
+        ]
+    }))
+}
+
+/// Scan project for documentation files and build a tree.
+fn scan_docs_tree(project_root: &Path) -> String {
+    use std::collections::BTreeMap;
+    use std::fs;
+
+    let mut tree: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let doc_extensions = ["md", "mdx", "txt", "rst"];
+
+    // Known documentation directories
+    let doc_dirs = ["docs", "doc", "specs", ".claude", ".cursor"];
+
+    // Scan known doc directories
+    for dir_name in &doc_dirs {
+        let dir_path = project_root.join(dir_name);
+        if dir_path.exists() && dir_path.is_dir() {
+            if let Ok(entries) = fs::read_dir(&dir_path) {
+                let files: Vec<String> = entries
+                    .flatten()
+                    .filter(|e| {
+                        let path = e.path();
+                        path.is_file()
+                            && path
+                                .extension()
+                                .map(|ext| doc_extensions.contains(&ext.to_string_lossy().as_ref()))
+                                .unwrap_or(false)
+                    })
+                    .map(|e| e.file_name().to_string_lossy().to_string())
+                    .collect();
+
+                if !files.is_empty() {
+                    tree.insert(format!("{}/", dir_name), files);
+                }
+            }
+        }
+    }
+
+    // Check root for common doc files
+    let root_docs: Vec<String> = ["README.md", "CHANGELOG.md", "CONTRIBUTING.md", "LICENSE.md"]
+        .iter()
+        .filter(|name| project_root.join(name).exists())
+        .map(|s| s.to_string())
+        .collect();
+
+    if !root_docs.is_empty() {
+        tree.insert("(root)".to_string(), root_docs);
+    }
+
+    // Format as markdown
+    if tree.is_empty() {
+        return "No documentation files found.".to_string();
+    }
+
+    let mut output = String::from("# Documentation Structure\n\n");
+
+    for (dir, files) in &tree {
+        output.push_str(&format!("## {}\n", dir));
+        for file in files {
+            output.push_str(&format!("- {}\n", file));
+        }
+        output.push('\n');
+    }
+
+    output.trim_end().to_string()
+}
+
 /// Handle incoming MCP request.
 fn handle_request(request: &JsonRpcRequest) -> JsonRpcResponse {
     let id = request.id.clone().unwrap_or(Value::Null);
@@ -241,6 +349,10 @@ fn handle_request(request: &JsonRpcRequest) -> JsonRpcResponse {
                     Err(e) => JsonRpcResponse::error(id, -32000, e.to_string()),
                 },
                 "squirrel_get_doc_debt" => match handle_get_doc_debt(&request.params) {
+                    Ok(result) => JsonRpcResponse::success(id, result),
+                    Err(e) => JsonRpcResponse::error(id, -32000, e.to_string()),
+                },
+                "squirrel_get_docs_tree" => match handle_get_docs_tree(&request.params) {
                     Ok(result) => JsonRpcResponse::success(id, result),
                     Err(e) => JsonRpcResponse::error(id, -32000, e.to_string()),
                 },
