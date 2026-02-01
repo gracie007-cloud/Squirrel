@@ -8,24 +8,24 @@ MCP and CLI contracts. No IPC (single binary, no Python service).
 
 ### MCP-001: squirrel_store_memory
 
-Store a memory. Called by CLI when it decides something is worth remembering.
+Store a behavioral correction. Called by CLI AI when the user corrects it, it learns a project rule, a decision constrains future work, or it finds an error fix.
 
 **Tool Definition:**
 ```json
 {
   "name": "squirrel_store_memory",
-  "description": "Store a memory in Squirrel. Use when user states a preference, you learn a project fact, make a decision, or solve a problem.",
+  "description": "Store a behavioral correction. Use when the user corrects you, you learn a project rule, a decision constrains future work, or you find a fix for an error.",
   "inputSchema": {
     "type": "object",
     "properties": {
       "content": {
         "type": "string",
-        "description": "The memory content"
+        "description": "An actionable instruction: 'Do X', 'Don't do Y', or 'When Z, do W' (1-2 sentences)"
       },
       "memory_type": {
         "type": "string",
         "enum": ["preference", "project", "decision", "solution"],
-        "description": "Type of memory"
+        "description": "Type: preference (user correction), project (project rule), decision (constrains future work), solution (error fix)"
       },
       "tags": {
         "type": "array",
@@ -54,13 +54,13 @@ Store a memory. Called by CLI when it decides something is worth remembering.
 
 ### MCP-002: squirrel_get_memory
 
-Retrieve memories. Called by CLI when user needs project context or at session start via skill.
+Retrieve behavioral corrections. Called at session start (via skill) or before making choices the user may have corrected before.
 
 **Tool Definition:**
 ```json
 {
   "name": "squirrel_get_memory",
-  "description": "Get memories from Squirrel. Call when you need project context, user preferences, or past decisions.",
+  "description": "Get behavioral corrections from Squirrel. Call at session start or before making choices the user may have corrected before.",
   "inputSchema": {
     "type": "object",
     "properties": {
@@ -87,19 +87,19 @@ Retrieve memories. Called by CLI when user needs project context or at session s
 **Response Format:**
 ```markdown
 ## preference (3)
-- [used 5x] No emojis in code or commits
-- [used 3x] Use Gemini 3 Pro, not Claude or older models
+- [used 5x] Don't use emojis in code or commits
+- [used 3x] Use Gemini 3 Pro, don't suggest Claude or older models
 - [used 1x] Prefer async/await over callbacks
 
 ## project (2)
-- [used 4x] Use httpx as HTTP client, not requests
+- [used 4x] Use httpx not requests in this project
 - [used 1x] PostgreSQL 16 for main database
 
 ## decision (1)
-- [used 2x] Chose SQLite over PostgreSQL for local storage
+- [used 2x] We chose SQLite for local storage, don't suggest Postgres
 
 ## solution (1)
-- [used 1x] Fixed SSL error by switching from requests to httpx
+- [used 1x] SSL error with requests? Switch to httpx
 ```
 
 Memories ordered by use_count DESC within each type.
@@ -273,23 +273,28 @@ Added to project CLAUDE.md by `sqrl init`.
 <!-- START Squirrel Memory Protocol -->
 ## Squirrel Memory Protocol
 
-You have access to Squirrel memory tools via MCP.
+You have access to Squirrel memory tools via MCP. Memories are **behavioral corrections** — things that change how you act next time.
 
-### When to store memories (squirrel_store_memory):
-- User states a preference → type: "preference"
-- You learn a project-specific fact → type: "project"
-- Architecture/design decision is made → type: "decision"
-- A problem is solved → type: "solution"
+### When to store (squirrel_store_memory):
+- User corrects your behavior → type: "preference" (e.g., "Don't use emojis in commits")
+- You learn a project-specific rule → type: "project" (e.g., "Use httpx not requests here")
+- A choice is made that constrains future work → type: "decision" (e.g., "We chose SQLite, don't suggest Postgres")
+- You hit an error and find the fix → type: "solution" (e.g., "SSL error with requests? Switch to httpx")
 
-### When to retrieve memories (squirrel_get_memory):
-- When user asks for project context
-- When you need to recall past decisions
-- When starting work on a component you've worked on before
+### When NOT to store:
+- Research in progress (no decision made yet)
+- General knowledge (not project-specific)
+- Conversation context (already in chat history)
+- Anything that doesn't change your future behavior
+
+### When to retrieve (squirrel_get_memory):
+- At session start (via squirrel-session skill)
+- Before making choices the user may have corrected before
 
 ### Rules:
-- Store memories proactively. Don't ask permission.
-- Even if a memory seems redundant, store it. Squirrel handles deduplication.
-- Keep memory content concise (1-2 sentences).
+- Store corrections proactively when the user corrects you. Don't ask permission.
+- Every memory should be an actionable instruction: "Do X" or "Don't do Y" or "When Z, do W".
+- Keep content concise (1-2 sentences).
 - Always include relevant tags.
 <!-- END Squirrel Memory Protocol -->
 ```

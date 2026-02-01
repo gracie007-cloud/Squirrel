@@ -33,22 +33,26 @@ CREATE INDEX idx_memories_use_count ON memories(use_count DESC);
 
 ### Memory Types
 
-| Type | Description | Examples |
-|------|-------------|---------|
-| `preference` | User's coding style | "No emojis", "Use Gemini 3 Pro" |
-| `project` | Project-specific knowledge | "Use httpx not requests" |
-| `decision` | Architecture decisions | "Chose PostgreSQL for transactions" |
-| `solution` | Problem-solution pairs | "Fixed SSL by switching to httpx" |
+Memories are behavioral corrections — things that change how the AI acts next time. Every memory should be an actionable instruction.
+
+| Type | When to store | Example |
+|------|---------------|---------|
+| `preference` | User corrects AI behavior | "Don't use emojis in code or commits" |
+| `project` | AI learns a project-specific rule | "Use httpx not requests in this project" |
+| `decision` | A choice constrains future behavior | "We chose SQLite, don't suggest Postgres" |
+| `solution` | AI hits an error and finds the fix | "SSL error with requests? Switch to httpx" |
+
+**Don't store:** research in progress, general knowledge, conversation context, anything that doesn't change AI behavior.
 
 ### Examples
 
 | memory_type | content | tags | use_count |
 |-------------|---------|------|-----------|
-| preference | No emojis in code or commits | ["style"] | 5 |
-| preference | Use Gemini 3 Pro, not Claude or older models | ["tooling", "llm"] | 3 |
-| project | Use httpx as HTTP client, not requests | ["backend", "http"] | 4 |
-| decision | Chose SQLite over PostgreSQL for local storage | ["database", "architecture"] | 2 |
-| solution | Fixed SSL error by switching from requests to httpx | ["backend", "ssl", "fix"] | 1 |
+| preference | Don't use emojis in code or commits | ["style"] | 5 |
+| preference | Use Gemini 3 Pro, don't suggest Claude or older models | ["tooling", "llm"] | 3 |
+| project | Use httpx not requests in this project | ["backend", "http"] | 4 |
+| decision | We chose SQLite for local storage, don't suggest Postgres | ["database", "architecture"] | 2 |
+| solution | SSL error with requests? Switch to httpx | ["backend", "ssl", "fix"] | 1 |
 
 ---
 

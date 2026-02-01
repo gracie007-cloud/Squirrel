@@ -4,33 +4,37 @@ Memory layer for AI coding agents. Local-first, no AI in Squirrel itself.
 
 ## Why Squirrel
 
-- **AI learns your style.** Preferences and decisions persist across sessions.
-- **Mistakes remembered.** Past errors become future prevention.
+- **AI stops repeating mistakes.** Corrections persist across sessions.
+- **Your AI, your rules.** Tell it once, it remembers forever.
 - **Docs stay fresh.** Git hooks detect when docs need updates.
 - **Zero overhead.** No daemon, no background process. Runs only when called.
 
 ## How It Works
 
 ```
-You code with AI → AI decides what's worth remembering
+AI makes a mistake → User corrects it → AI stores the correction
         ↓
 AI calls MCP: squirrel_store_memory
         ↓
 Squirrel stores to local SQLite
         ↓
-Next session: AI calls squirrel_get_memory → context restored
+Next session: AI calls squirrel_get_memory → corrections loaded
 ```
 
 Squirrel has **no AI**. Your CLI tool (Claude Code, Cursor, etc.) has full conversation context and decides what to store. Squirrel is just storage + git hooks.
 
 ## Memory Types
 
-| Type | Description | Example |
-|------|-------------|---------|
-| `preference` | Coding style | "No emojis in code or commits" |
-| `project` | Project knowledge | "Use httpx not requests" |
-| `decision` | Architecture choices | "Chose SQLite for local storage" |
-| `solution` | Problem-solution pairs | "Fixed SSL by switching to httpx" |
+Memories are behavioral corrections — things that change how the AI acts next time.
+
+| Type | When to store | Example |
+|------|---------------|---------|
+| `preference` | User corrects the AI's style | "Don't use emojis in code or commits" |
+| `project` | AI learns a project rule | "Use httpx not requests in this project" |
+| `decision` | A choice is made that constrains future behavior | "We chose SQLite, don't suggest Postgres" |
+| `solution` | AI hits an error and finds the fix | "SSL error with requests? Switch to httpx" |
+
+**Don't store:** research in progress, general knowledge, conversation context, anything that doesn't change AI behavior.
 
 ## Doc Debt Detection
 

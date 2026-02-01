@@ -103,23 +103,28 @@ fn add_memory_triggers(project_root: &Path) -> Result<(), Error> {
 <!-- START Squirrel Memory Protocol -->
 ## Squirrel Memory Protocol
 
-You have access to Squirrel memory tools via MCP.
+You have access to Squirrel memory tools via MCP. Memories are **behavioral corrections** — things that change how you act next time.
 
-### When to store memories (squirrel_store_memory):
-- User states a preference → type: "preference"
-- You learn a project-specific fact → type: "project"
-- Architecture/design decision is made → type: "decision"
-- A problem is solved → type: "solution"
+### When to store (squirrel_store_memory):
+- User corrects your behavior → type: "preference" (e.g., "Don't use emojis in commits")
+- You learn a project-specific rule → type: "project" (e.g., "Use httpx not requests here")
+- A choice is made that constrains future work → type: "decision" (e.g., "We chose SQLite, don't suggest Postgres")
+- You hit an error and find the fix → type: "solution" (e.g., "SSL error with requests? Switch to httpx")
 
-### When to retrieve memories (squirrel_get_memory):
-- When user asks for project context
-- When you need to recall past decisions
-- When starting work on a component you've worked on before
+### When NOT to store:
+- Research in progress (no decision made yet)
+- General knowledge (not project-specific)
+- Conversation context (already in chat history)
+- Anything that doesn't change your future behavior
+
+### When to retrieve (squirrel_get_memory):
+- At session start (via squirrel-session skill)
+- Before making choices the user may have corrected before
 
 ### Rules:
-- Store memories proactively. Don't ask permission.
-- Even if a memory seems redundant, store it. Squirrel handles deduplication.
-- Keep memory content concise (1-2 sentences).
+- Store corrections proactively when the user corrects you. Don't ask permission.
+- Every memory should be an actionable instruction: "Do X" or "Don't do Y" or "When Z, do W".
+- Keep content concise (1-2 sentences).
 - Always include relevant tags.
 <!-- END Squirrel Memory Protocol -->
 "#;

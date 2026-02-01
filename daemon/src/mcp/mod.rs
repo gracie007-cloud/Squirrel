@@ -69,18 +69,18 @@ fn get_tools() -> Value {
         "tools": [
             {
                 "name": "squirrel_store_memory",
-                "description": "Store a memory in Squirrel. Use when user states a preference, you learn a project fact, make a decision, or solve a problem.",
+                "description": "Store a behavioral correction. Use when the user corrects you, you learn a project rule, a decision constrains future work, or you find a fix for an error.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
                         "content": {
                             "type": "string",
-                            "description": "The memory content (1-2 sentences)"
+                            "description": "An actionable instruction: 'Do X', 'Don't do Y', or 'When Z, do W' (1-2 sentences)"
                         },
                         "memory_type": {
                             "type": "string",
                             "enum": ["preference", "project", "decision", "solution"],
-                            "description": "Type of memory"
+                            "description": "Type: preference (user correction), project (project rule), decision (constrains future work), solution (error fix)"
                         },
                         "tags": {
                             "type": "array",
@@ -93,7 +93,7 @@ fn get_tools() -> Value {
             },
             {
                 "name": "squirrel_get_memory",
-                "description": "Get memories from Squirrel. Call when you need project context, user preferences, or past decisions.",
+                "description": "Get behavioral corrections from Squirrel. Call at session start or before making choices the user may have corrected before.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
