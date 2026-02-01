@@ -1,4 +1,4 @@
-//! Show Squirrel project status.
+//! Show Squirrel status.
 
 use std::path::Path;
 
