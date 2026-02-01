@@ -377,6 +377,52 @@ pub fn get_unresolved_doc_debt(project_root: &Path) -> Result<Vec<DocDebt>, Erro
     Ok(debts)
 }
 
+/// Resolve doc debt entries where expected docs were updated.
+pub fn resolve_doc_debt_by_docs(
+    project_root: &Path,
+    updated_docs: &[String],
+) -> Result<usize, Error> {
+    let path = db_path(project_root);
+    if !path.exists() {
+        return Ok(0);
+    }
+
+    let conn = Connection::open(&path)?;
+
+    let table_exists: i32 = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='doc_debt'",
+        [],
+        |row| row.get(0),
+    )?;
+    if table_exists == 0 {
+        return Ok(0);
+    }
+
+    let now = chrono::Utc::now().to_rfc3339();
+    let mut resolved_count = 0;
+
+    // Get all unresolved debt
+    let mut stmt = conn.prepare("SELECT id, expected_docs FROM doc_debt WHERE resolved = 0")?;
+
+    let debts: Vec<(String, String)> = stmt
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .collect::<SqliteResult<Vec<_>>>()?;
+
+    for (id, expected_docs_json) in &debts {
+        let expected: Vec<String> = serde_json::from_str(expected_docs_json).unwrap_or_default();
+        // If any expected doc was updated, resolve the debt
+        if expected.iter().any(|doc| updated_docs.contains(doc)) {
+            conn.execute(
+                "UPDATE doc_debt SET resolved = 1, resolved_at = ?1 WHERE id = ?2",
+                rusqlite::params![now, id],
+            )?;
+            resolved_count += 1;
+        }
+    }
+
+    Ok(resolved_count)
+}
+
 /// Check if doc debt exists for a commit.
 pub fn has_doc_debt_for_commit(project_root: &Path, commit_sha: &str) -> Result<bool, Error> {
     let path = db_path(project_root);

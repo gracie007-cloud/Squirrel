@@ -1,142 +1,92 @@
 # Squirrel
 
-Memory layer for AI coding agents. Fully automatic.
+Memory layer for AI coding agents. Local-first, no AI in Squirrel itself.
 
 ## Why Squirrel
 
-- **Vibe coding works.** AI learns your style the more you code.
+- **AI learns your style.** Preferences and decisions persist across sessions.
 - **Mistakes remembered.** Past errors become future prevention.
-- **Docs stay fresh.** Auto-detects when docs need updates.
-- **Team memory persists.** Knowledge survives member changes.
+- **Docs stay fresh.** Git hooks detect when docs need updates.
+- **Zero overhead.** No daemon, no background process. Runs only when called.
 
 ## How It Works
 
 ```
-You code with AI (corrections, preferences, decisions)
+You code with AI → AI decides what's worth remembering
         ↓
-Squirrel watches silently (zero manual work)
+AI calls MCP: squirrel_store_memory
         ↓
-Memory extracted automatically
+Squirrel stores to local SQLite
         ↓
-Three outputs:
-  1. User Style    → synced to CLAUDE.md, .cursorrules
-  2. Project Memory → exposed via MCP
-  3. Doc Awareness  → detects stale docs
+Next session: AI calls squirrel_get_memory → context restored
 ```
 
-## Memory Architecture
+Squirrel has **no AI**. Your CLI tool (Claude Code, Cursor, etc.) has full conversation context and decides what to store. Squirrel is just storage + git hooks.
 
-### User Style (Global)
+## Memory Types
 
-Personal preferences synced to agent config files. Applies across all projects.
+| Type | Description | Example |
+|------|-------------|---------|
+| `preference` | Coding style | "No emojis in code or commits" |
+| `project` | Project knowledge | "Use httpx not requests" |
+| `decision` | Architecture choices | "Chose SQLite for local storage" |
+| `solution` | Problem-solution pairs | "Fixed SSL by switching to httpx" |
 
-```markdown
-<!-- START Squirrel User Style -->
-- Prefer async/await over callbacks
-- Never use emoji in code
-- Keep commits concise
-<!-- END Squirrel User Style -->
-```
+## Doc Debt Detection
 
-**Storage:** `~/.sqrl/user_style.db`
-
-**Sync targets:** `~/.claude/CLAUDE.md`, `~/.cursor/rules/`, `~/.codex/instructions.md`
-
-### Project Memory (Per-Project)
-
-Project-specific knowledge accessed via MCP.
+Git hooks track when code changes but related docs don't.
 
 ```
-squirrel_get_memory → returns:
-
-## frontend
-- Uses shadcn/ui components
-- State management with Zustand
-
-## backend
-- FastAPI with Pydantic models
-- Use httpx for HTTP client
+You commit .rs code → post-commit hook checks mappings
+    → specs/ARCHITECTURE.md not updated? → doc debt recorded
+You push → pre-push hook warns about pending debt
 ```
-
-**Storage:** `<repo>/.sqrl/memory.db`
-
-**Access:** MCP tool `squirrel_get_memory`
-
-### Doc Awareness
-
-Indexes project docs, detects when code changes but docs don't.
-
-| Feature | Description |
-|---------|-------------|
-| Doc Tree | Summarized doc structure via MCP |
-| Doc Debt | Detects stale docs after commits |
-| Auto Hooks | Git hooks remind to update docs |
-
-## Supported Tools
-
-Claude Code, Cursor, Codex CLI (others coming)
 
 ## Quick Start
 
-> **v1 releasing in one week.**
-
 ```bash
-# Configure API key and select your tools
-sqrl config
-
-# Initialize in any project (new or existing)
+# Initialize in any project
 cd ~/my-project
 sqrl init
 ```
+
+`sqrl init` automatically:
+- Creates `.sqrl/` with config and database
+- Installs git hooks for doc debt tracking
+- Registers MCP server with your AI tool
+- Adds memory triggers to CLAUDE.md
 
 ## CLI
 
 | Command | Description |
 |---------|-------------|
 | `sqrl init` | Initialize project |
-| `sqrl on` | Enable watcher |
-| `sqrl off` | Disable watcher |
-| `sqrl config` | Open Dashboard |
-| `sqrl status` | Show status |
+| `sqrl status` | Show memories and doc debt |
+| `sqrl goaway` | Remove all Squirrel data |
+| `sqrl mcp-serve` | Start MCP server (called by AI tool) |
 
-## For Teams (Cloud)
+## Supported Tools
 
-Squirrel Cloud: shared memory across your engineering team.
-
-| Why Teams Need This |
-|---------------------|
-| New members get project context instantly via AI |
-| Corrections from any member benefit everyone |
-| Project knowledge survives when people leave |
-| Consistent coding standards across the team |
-
-### Cloud Features
-
-| Feature | Free | Team |
-|---------|------|------|
-| User style sync | ✓ | ✓ |
-| Project memory | ✓ | ✓ |
-| Doc awareness | ✓ | ✓ |
-| **Shared team memory** | - | ✓ |
-| **Cross-machine sync** | - | ✓ |
-| **Team management** | - | ✓ |
-| **Analytics dashboard** | - | ✓ |
-
-**Interested in Squirrel for your team?** Contact us: [team@squirrel.dev](mailto:team@squirrel.dev)
+Claude Code (others coming)
 
 ## Architecture
 
 ```
-Rust Daemon          Python Memory Service
-(I/O, storage, MCP)  (LLM operations)
-       │                    │
-       └──── IPC ───────────┘
+CLI AI (Claude Code, Cursor, etc.)
+    │ MCP
+    ▼
+sqrl binary (Rust)
+    │
+    ▼
+SQLite (.sqrl/memory.db)
 ```
+
+Single Rust binary. No daemon, no Python, no LLM calls, no network.
 
 | Component | Responsibility |
 |-----------|----------------|
-| Rust Daemon | Log watching, SQLite, MCP server, CLI, Dashboard |
-| Python Service | Log cleaning, memory extraction, style sync |
+| sqrl binary | MCP server, CLI, git hooks, SQLite storage |
+| CLI AI | Decides what to remember, fixes doc debt |
 
 ## Development
 
@@ -145,8 +95,8 @@ git clone https://github.com/anthropics/squirrel.git
 cd squirrel
 devenv shell
 
-test-all     # Run tests
-dev-daemon   # Start dev daemon
+cargo test    # Run tests
+cargo build   # Build binary
 ```
 
 ## License

@@ -61,7 +61,7 @@ pub struct DocsConfig {
 }
 
 /// Doc debt detection rules.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DocRulesConfig {
     /// Custom mappings: code pattern -> doc file.
     #[serde(default)]
@@ -153,6 +153,41 @@ impl Default for DocsConfig {
             extensions: default_extensions(),
             include_paths: default_include_paths(),
             exclude_paths: default_exclude_paths(),
+        }
+    }
+}
+
+impl Default for DocRulesConfig {
+    fn default() -> Self {
+        Self {
+            mappings: vec![
+                CodeDocMapping {
+                    code: "daemon/src/**/*.rs".to_string(),
+                    doc: "specs/ARCHITECTURE.md".to_string(),
+                },
+                CodeDocMapping {
+                    code: "daemon/src/mcp/**/*.rs".to_string(),
+                    doc: "specs/INTERFACES.md".to_string(),
+                },
+                CodeDocMapping {
+                    code: "daemon/src/storage/**/*.rs".to_string(),
+                    doc: "specs/SCHEMAS.md".to_string(),
+                },
+            ],
+            reference_patterns: vec![
+                ReferencePattern {
+                    pattern: r"SCHEMA-\d+".to_string(),
+                    doc: "specs/SCHEMAS.md".to_string(),
+                },
+                ReferencePattern {
+                    pattern: r"MCP-\d+".to_string(),
+                    doc: "specs/INTERFACES.md".to_string(),
+                },
+                ReferencePattern {
+                    pattern: r"ADR-\d+".to_string(),
+                    doc: "specs/DECISIONS.md".to_string(),
+                },
+            ],
         }
     }
 }

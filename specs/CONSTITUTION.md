@@ -154,4 +154,4 @@ Single source of truth for AI tool instructions:
 | `.claude/CLAUDE.md` | Claude Code project rules |
 | `.cursor/rules/*.mdc` | Cursor project rules |
 
-Squirrel manages a block in these files for user style (see INTERFACES.md for format).
+Squirrel manages a Memory Protocol block in CLAUDE.md (added by `sqrl init`) that tells the CLI AI when to store and retrieve memories.

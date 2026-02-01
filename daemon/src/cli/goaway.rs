@@ -6,6 +6,7 @@ use std::io::{self, Write};
 use tracing::warn;
 
 use crate::cli::hooks;
+use crate::config::Config;
 use crate::error::Error;
 
 /// Run the goaway command.
@@ -52,6 +53,11 @@ pub fn run(force: bool) -> Result<(), Error> {
         } else {
             println!("Git hooks removed.");
         }
+    }
+
+    // Unregister MCP servers
+    if let Ok(config) = Config::load(&project_root) {
+        unregister_mcp_servers(&config);
     }
 
     // Remove skill directory
@@ -122,6 +128,36 @@ fn print_dir_contents(path: &std::path::Path, indent: usize) -> Result<(), Error
         }
     }
     Ok(())
+}
+
+/// Unregister MCP servers from enabled AI tools.
+fn unregister_mcp_servers(config: &Config) {
+    if config.tools.claude_code {
+        unregister_claude_code_mcp();
+    }
+}
+
+/// Unregister from Claude Code via `claude mcp remove`.
+fn unregister_claude_code_mcp() {
+    use std::process::Command;
+
+    let which = Command::new("which").arg("claude").output();
+    if which.is_err() || !which.unwrap().status.success() {
+        return;
+    }
+
+    let output = Command::new("claude")
+        .args(["mcp", "remove", "squirrel", "-s", "project"])
+        .output();
+
+    match output {
+        Ok(o) if o.status.success() => {
+            println!("MCP server unregistered from Claude Code.");
+        }
+        _ => {
+            warn!("Failed to unregister MCP server from Claude Code");
+        }
+    }
 }
 
 fn format_size(bytes: u64) -> String {

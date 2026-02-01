@@ -1,6 +1,6 @@
 ---
 description: Testing requirements for the project
-globs: ["**/test_*.py", "**/tests/**", "**/*_test.rs"]
+globs: ["**/tests/**", "**/*_test.rs"]
 ---
 
 # Testing Rules
@@ -19,47 +19,16 @@ cargo test
 
 Test categories:
 - Unit: Individual functions
-- Integration: IPC, storage
-- Platform: OS-specific behavior
-
-## Python Tests
-
-Location: `agent/tests/`
-
-```bash
-pytest
-```
-
-Test categories:
-- Unit: Agent logic with mocked LLM
-- Integration: End-to-end with mock daemon
-
-## Mocking LLM Calls
-
-Never make real LLM calls in tests. Use fixtures:
-
-```python
-@pytest.fixture
-def mock_extraction_response():
-    return [
-        {
-            "memory_type": "lesson",
-            "outcome": "success",
-            "text": "Test memory",
-            "confidence": 0.9,
-            "importance": "medium"
-        }
-    ]
-```
+- Integration: Storage, MCP tools
 
 ## Test Naming
 
 Format: `test_<what>_<condition>_<expected>`
 
 Examples:
-- `test_ingest_episode_empty_returns_error`
-- `test_get_context_trivial_task_fast_path`
-- `test_conflict_detection_keyed_fact_deterministic`
+- `test_store_memory_new_returns_success`
+- `test_store_memory_duplicate_increments_use_count`
+- `test_get_memory_by_type_filters_correctly`
 
 ## Coverage Target
 
