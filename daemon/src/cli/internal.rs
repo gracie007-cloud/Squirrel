@@ -121,6 +121,14 @@ pub fn docguard_record() -> Result<(), Error> {
         "pattern"
     };
 
+    // Auto-resolve existing debt if docs were updated in this commit
+    if !doc_files.is_empty() {
+        let doc_file_list: Vec<String> = doc_files.iter().map(|s| s.to_string()).collect();
+        if let Err(e) = storage::resolve_doc_debt_by_docs(&project_root, &doc_file_list) {
+            debug!(error = %e, "Failed to auto-resolve doc debt");
+        }
+    }
+
     // Store doc debt
     let code_files_vec: Vec<String> = code_files.into_iter().cloned().collect();
     let expected_docs_vec: Vec<String> = expected_docs.into_iter().collect();
@@ -272,15 +280,9 @@ fn matches_glob_pattern(path: &str, pattern: &str) -> bool {
 }
 
 /// Get default doc file for a code file based on extension.
-fn get_default_doc_for_file(path: &str) -> Option<String> {
-    let path = Path::new(path);
-    let ext = path.extension()?.to_string_lossy().to_lowercase();
-
-    // Default mappings based on file extension
-    match ext.as_str() {
-        "rs" => Some("specs/ARCHITECTURE.md".to_string()),
-        "py" => Some("specs/ARCHITECTURE.md".to_string()),
-        "ts" | "tsx" | "js" | "jsx" => Some("docs/README.md".to_string()),
-        _ => None,
-    }
+/// Fallback when no config mappings match.
+fn get_default_doc_for_file(_path: &str) -> Option<String> {
+    // Default mappings are now seeded in config.yaml by sqrl init.
+    // This function is a fallback for projects that cleared their mappings.
+    None
 }

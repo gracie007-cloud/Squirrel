@@ -14,9 +14,7 @@ All specs live in `specs/` folder:
 | CONSTITUTION.md | Project governance, principles |
 | ARCHITECTURE.md | System boundaries, data flow |
 | SCHEMAS.md | Database schemas with IDs |
-| INTERFACES.md | IPC, MCP, CLI contracts |
-| KEYS.md | Declarative key registry |
-| PROMPTS.md | LLM prompts with model tiers |
+| INTERFACES.md | MCP, CLI contracts |
 | DECISIONS.md | ADR decision log |
 
 ## ID Requirements (DR1)
@@ -26,27 +24,17 @@ Every element must have a stable ID:
 | Type | Format | Example |
 |------|--------|---------|
 | Schema | SCHEMA-NNN | SCHEMA-001 |
-| Interface | IPC-NNN, MCP-NNN, CLI-NNN | IPC-001 |
-| Key | KEY-P-NNN, KEY-U-NNN | KEY-P-001 |
-| Prompt | PROMPT-NNN | PROMPT-001 |
+| Interface | MCP-NNN, CLI-NNN | MCP-001 |
 | Decision | ADR-NNN | ADR-001 |
+| Architecture | ARCH-NNN | ARCH-001 |
 
-## AI-Friendly Format (P5)
+## AI-Friendly Format
 
 Write for AI consumption:
 - Tables over prose
 - Explicit schemas with types
 - No ambiguity
 - Code examples where helpful
-
-Bad:
-> "The memory system stores various types of information including lessons and facts."
-
-Good:
-| memory_type | Description |
-|-------------|-------------|
-| lesson | What worked or failed |
-| fact | Stable knowledge |
 
 ## Change Process
 

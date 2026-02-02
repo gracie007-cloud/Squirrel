@@ -5,11 +5,12 @@ use std::io::{self, Write};
 
 use tracing::warn;
 
-use crate::cli::{hooks, service};
+use crate::cli::hooks;
+use crate::config::Config;
 use crate::error::Error;
 
 /// Run the goaway command.
-pub async fn run(force: bool) -> Result<(), Error> {
+pub fn run(force: bool) -> Result<(), Error> {
     let project_root = std::env::current_dir()?;
     let sqrl_dir = project_root.join(".sqrl");
 
@@ -22,6 +23,14 @@ pub async fn run(force: bool) -> Result<(), Error> {
     println!("This will remove:");
     println!("  .sqrl/ ({})", sqrl_dir.display());
     print_dir_contents(&sqrl_dir, 4)?;
+
+    let skill_dir = project_root
+        .join(".claude")
+        .join("skills")
+        .join("squirrel-session");
+    if skill_dir.exists() {
+        println!("  .claude/skills/squirrel-session/");
+    }
 
     // Confirm unless --force
     if !force {
@@ -46,21 +55,57 @@ pub async fn run(force: bool) -> Result<(), Error> {
         }
     }
 
-    // Stop and uninstall the service
-    if service::is_installed().unwrap_or(false) {
-        println!("Stopping and uninstalling background service...");
-        if let Err(e) = service::uninstall() {
-            warn!(error = %e, "Failed to uninstall service");
-            println!("Warning: Could not uninstall background service: {}", e);
-        }
+    // Unregister MCP servers
+    if let Ok(config) = Config::load(&project_root) {
+        unregister_mcp_servers(&config);
     }
 
-    // Remove the directory
+    // Remove skill directory
+    if skill_dir.exists() {
+        fs::remove_dir_all(&skill_dir)?;
+        println!("Skill file removed.");
+    }
+
+    // Remove memory triggers from CLAUDE.md
+    remove_memory_triggers(&project_root);
+
+    // Remove .sqrl/ directory
     fs::remove_dir_all(&sqrl_dir)?;
     println!("Removed .sqrl/");
     println!("Squirrel has left the building.");
 
     Ok(())
+}
+
+/// Remove Squirrel memory triggers from CLAUDE.md.
+fn remove_memory_triggers(project_root: &std::path::Path) {
+    let claude_md_path = project_root.join(".claude").join("CLAUDE.md");
+    if !claude_md_path.exists() {
+        return;
+    }
+
+    if let Ok(content) = fs::read_to_string(&claude_md_path) {
+        if let (Some(start), Some(end)) = (
+            content.find("<!-- START Squirrel Memory Protocol -->"),
+            content.find("<!-- END Squirrel Memory Protocol -->"),
+        ) {
+            let end = end + "<!-- END Squirrel Memory Protocol -->".len();
+            let mut new_content = String::new();
+            new_content.push_str(content[..start].trim_end());
+            let after = content[end..].trim_start();
+            if !after.is_empty() {
+                new_content.push_str("\n\n");
+                new_content.push_str(after);
+            }
+            new_content.push('\n');
+
+            if let Err(e) = fs::write(&claude_md_path, new_content) {
+                warn!(error = %e, "Failed to clean CLAUDE.md");
+            } else {
+                println!("Memory triggers removed from CLAUDE.md.");
+            }
+        }
+    }
 }
 
 fn print_dir_contents(path: &std::path::Path, indent: usize) -> Result<(), Error> {
@@ -83,6 +128,36 @@ fn print_dir_contents(path: &std::path::Path, indent: usize) -> Result<(), Error
         }
     }
     Ok(())
+}
+
+/// Unregister MCP servers from enabled AI tools.
+fn unregister_mcp_servers(config: &Config) {
+    if config.tools.claude_code {
+        unregister_claude_code_mcp();
+    }
+}
+
+/// Unregister from Claude Code via `claude mcp remove`.
+fn unregister_claude_code_mcp() {
+    use std::process::Command;
+
+    let which = Command::new("which").arg("claude").output();
+    if which.is_err() || !which.unwrap().status.success() {
+        return;
+    }
+
+    let output = Command::new("claude")
+        .args(["mcp", "remove", "squirrel", "-s", "project"])
+        .output();
+
+    match output {
+        Ok(o) if o.status.success() => {
+            println!("MCP server unregistered from Claude Code.");
+        }
+        _ => {
+            warn!("Failed to unregister MCP server from Claude Code");
+        }
+    }
 }
 
 fn format_size(bytes: u64) -> String {
