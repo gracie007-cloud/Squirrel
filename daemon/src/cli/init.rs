@@ -52,13 +52,16 @@ pub fn run() -> Result<(), Error> {
     // Add memory triggers to CLAUDE.md
     add_memory_triggers(&project_root)?;
 
-    // Register MCP server with enabled tools
-    register_mcp_servers(&config)?;
+    // Apply global MCP configs
+    println!();
+    crate::cli::apply::run()?;
 
+    println!();
     println!("Squirrel initialized.");
     println!();
     println!("Next steps:");
     println!("  Check status: sqrl status");
+    println!("  Configure: sqrl config");
 
     Ok(())
 }
@@ -146,60 +149,6 @@ You have access to Squirrel memory tools via MCP. Memories are **behavioral corr
 
     info!("Added memory triggers to CLAUDE.md");
     println!("Memory triggers added to CLAUDE.md.");
-
-    Ok(())
-}
-
-/// Register Squirrel as an MCP server with enabled AI tools.
-fn register_mcp_servers(config: &Config) -> Result<(), Error> {
-    let sqrl_bin = std::env::current_exe()?
-        .canonicalize()
-        .unwrap_or_else(|_| std::env::current_exe().unwrap());
-
-    if config.tools.claude_code {
-        register_claude_code_mcp(&sqrl_bin)?;
-    }
-
-    // Future: cursor, codex registration
-
-    Ok(())
-}
-
-/// Register with Claude Code via `claude mcp add`.
-fn register_claude_code_mcp(sqrl_bin: &Path) -> Result<(), Error> {
-    use std::process::Command;
-
-    // Check if claude CLI exists
-    let which = Command::new("which").arg("claude").output();
-    if which.is_err() || !which.unwrap().status.success() {
-        warn!("Claude Code CLI not found, skipping MCP registration");
-        return Ok(());
-    }
-
-    let output = Command::new("claude")
-        .args([
-            "mcp",
-            "add",
-            "squirrel",
-            "-s",
-            "project",
-            "--",
-            sqrl_bin.to_str().unwrap(),
-            "mcp-serve",
-        ])
-        .output()?;
-
-    if output.status.success() {
-        info!("Registered MCP server with Claude Code");
-        println!("MCP server registered with Claude Code.");
-    } else {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        warn!(stderr = %stderr, "Failed to register MCP server with Claude Code");
-        println!(
-            "Could not auto-register MCP server. Run manually:\n  claude mcp add squirrel -- {} mcp-serve",
-            sqrl_bin.display()
-        );
-    }
 
     Ok(())
 }

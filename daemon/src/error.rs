@@ -20,8 +20,17 @@ pub enum Error {
     #[error("Home directory not found")]
     HomeDirNotFound,
 
+    #[error("Home directory not found")]
+    NoHomeDir,
+
     #[error("Config not found: {0}")]
     ConfigNotFound(std::path::PathBuf),
+
+    #[error("Global config not found. Run 'sqrl config' first.")]
+    GlobalConfigNotFound,
+
+    #[error("MCP config not found: {0}")]
+    McpNotFound(String),
 
     #[error("Config parse error: {0}")]
     ConfigParse(String),

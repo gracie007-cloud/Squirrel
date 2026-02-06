@@ -3,6 +3,7 @@
 use std::path::Path;
 
 use crate::error::Error;
+use crate::global_config::GlobalConfig;
 use crate::storage;
 
 /// Run the status command. Returns exit code.
@@ -36,6 +37,35 @@ pub fn run() -> Result<i32, Error> {
     // Last activity
     if let Some(last_activity) = get_last_activity(&sqrl_dir) {
         println!("  Last activity: {}", last_activity);
+    }
+
+    // Global config info
+    println!();
+    if let Ok(global_dir) = GlobalConfig::dir() {
+        println!("Global Config: {}", global_dir.display());
+        if GlobalConfig::exists() {
+            if let Ok(config) = GlobalConfig::load() {
+                let mut enabled = Vec::new();
+                if config.tools.claude_code {
+                    enabled.push("Claude Code");
+                }
+                if config.tools.git {
+                    enabled.push("Git");
+                }
+                if config.tools.cursor {
+                    enabled.push("Cursor");
+                }
+                if config.tools.codex {
+                    enabled.push("Codex");
+                }
+                println!("  Enabled tools: {}", enabled.join(", "));
+            }
+            if let Ok(mcps) = GlobalConfig::list_mcps() {
+                println!("  MCP configs: {}", mcps.len());
+            }
+        } else {
+            println!("  Not configured. Run 'sqrl config' to set up.");
+        }
     }
 
     Ok(0)

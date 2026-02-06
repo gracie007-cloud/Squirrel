@@ -17,6 +17,176 @@ fn db_path(project_root: &Path) -> PathBuf {
     project_root.join(".sqrl").join("memory.db")
 }
 
+// === Storage struct for web API ===
+
+/// Storage handle for a project database.
+pub struct Storage {
+    conn: Connection,
+}
+
+impl Storage {
+    /// Open a storage connection to a database file.
+    pub fn open(path: &Path) -> Result<Self, Error> {
+        let conn = Connection::open(path)?;
+        ensure_memories_table(&conn)?;
+        Ok(Self { conn })
+    }
+
+    /// List all memories.
+    pub fn list_all_memories(&self) -> Result<Vec<Memory>, Error> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, memory_type, content, tags, use_count, created_at, updated_at
+             FROM memories ORDER BY use_count DESC",
+        )?;
+
+        let rows = stmt.query_map([], |row| {
+            let tags_json: String = row.get(3)?;
+            Ok(Memory {
+                id: row.get(0)?,
+                memory_type: row.get(1)?,
+                content: row.get(2)?,
+                tags: serde_json::from_str(&tags_json).unwrap_or_default(),
+                use_count: row.get(4)?,
+                created_at: row.get(5)?,
+                updated_at: row.get(6)?,
+            })
+        })?;
+
+        let mut memories = Vec::new();
+        for row in rows {
+            memories.push(row?);
+        }
+        Ok(memories)
+    }
+
+    /// Get a specific memory by ID.
+    pub fn get_memory(&self, id: &str) -> Result<Option<Memory>, Error> {
+        let result = self.conn.query_row(
+            "SELECT id, memory_type, content, tags, use_count, created_at, updated_at
+             FROM memories WHERE id = ?1",
+            [id],
+            |row| {
+                let tags_json: String = row.get(3)?;
+                Ok(Memory {
+                    id: row.get(0)?,
+                    memory_type: row.get(1)?,
+                    content: row.get(2)?,
+                    tags: serde_json::from_str(&tags_json).unwrap_or_default(),
+                    use_count: row.get(4)?,
+                    created_at: row.get(5)?,
+                    updated_at: row.get(6)?,
+                })
+            },
+        );
+
+        match result {
+            Ok(memory) => Ok(Some(memory)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Store a new memory.
+    pub fn store_memory(
+        &self,
+        memory_type: &str,
+        content: &str,
+        tags: &[String],
+    ) -> Result<StoreResult, Error> {
+        // Check for existing memory with same content
+        let existing: Option<(String, i64)> = self
+            .conn
+            .query_row(
+                "SELECT id, use_count FROM memories WHERE content = ?1",
+                [content],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .ok();
+
+        if let Some((id, use_count)) = existing {
+            let new_count = use_count + 1;
+            let now = chrono::Utc::now().to_rfc3339();
+            self.conn.execute(
+                "UPDATE memories SET use_count = ?1, updated_at = ?2 WHERE id = ?3",
+                rusqlite::params![new_count, now, id],
+            )?;
+            Ok(StoreResult {
+                stored: true,
+                id,
+                deduplicated: true,
+                use_count: new_count,
+            })
+        } else {
+            let id = uuid::Uuid::new_v4().to_string();
+            let now = chrono::Utc::now().to_rfc3339();
+            let tags_json = serde_json::to_string(tags)?;
+
+            self.conn.execute(
+                "INSERT INTO memories (id, memory_type, content, tags, use_count, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, 1, ?5, ?6)",
+                rusqlite::params![id, memory_type, content, tags_json, now, now],
+            )?;
+            Ok(StoreResult {
+                stored: true,
+                id,
+                deduplicated: false,
+                use_count: 1,
+            })
+        }
+    }
+
+    /// Update an existing memory.
+    pub fn update_memory(
+        &self,
+        id: &str,
+        memory_type: Option<&str>,
+        content: Option<&str>,
+        tags: Option<&[String]>,
+    ) -> Result<(), Error> {
+        let now = chrono::Utc::now().to_rfc3339();
+
+        if let Some(mt) = memory_type {
+            self.conn.execute(
+                "UPDATE memories SET memory_type = ?1, updated_at = ?2 WHERE id = ?3",
+                rusqlite::params![mt, now, id],
+            )?;
+        }
+
+        if let Some(c) = content {
+            self.conn.execute(
+                "UPDATE memories SET content = ?1, updated_at = ?2 WHERE id = ?3",
+                rusqlite::params![c, now, id],
+            )?;
+        }
+
+        if let Some(t) = tags {
+            let tags_json = serde_json::to_string(t)?;
+            self.conn.execute(
+                "UPDATE memories SET tags = ?1, updated_at = ?2 WHERE id = ?3",
+                rusqlite::params![tags_json, now, id],
+            )?;
+        }
+
+        Ok(())
+    }
+
+    /// Delete a memory by ID.
+    pub fn delete_memory(&self, id: &str) -> Result<(), Error> {
+        self.conn
+            .execute("DELETE FROM memories WHERE id = ?1", [id])?;
+        Ok(())
+    }
+}
+
+/// Result of storing a memory.
+#[derive(Debug, Clone, Serialize)]
+pub struct StoreResult {
+    pub stored: bool,
+    pub id: String,
+    pub deduplicated: bool,
+    pub use_count: i64,
+}
+
 // === Memory (SCHEMA-001) ===
 
 /// A stored memory (behavioral correction).
