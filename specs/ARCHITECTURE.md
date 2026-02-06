@@ -333,11 +333,10 @@ Always informational, never blocks. AI makes the decision.
 
 ---
 
-## Future (Not v1)
+## Future
 
-| Feature | When |
-|---------|------|
-| Memory deduplication AI | Cloud version |
-| Team sync | Cloud version |
-| Embedding search | v2 if needed |
-| More CLI tools (Cursor, Codex) | v1.1 |
+| Feature | Description |
+|---------|-------------|
+| Repo sync | Sync memories via user's git repo |
+| More CLI tools | Cursor, Codex support |
+| Embedding search | Semantic memory retrieval |

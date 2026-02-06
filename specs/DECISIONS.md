@@ -243,30 +243,29 @@ Key simplifications:
 
 ---
 
-## ADR-013: B2B Focus with B2D Open Source
+## ADR-013: Open Source with Repo Sync
 
 **Status:** accepted
 **Date:** 2025-01-20
+**Updated:** 2025-02-06
 
 **Context:**
-Need to determine business model and feature prioritization.
+Need to determine project direction and sync strategy.
 
 **Decision:**
-B2B (Business to Business) is the main focus. B2D (Business to Developer) is the open source layer.
+Fully open source (MIT). No cloud service. Sync via user-connected git repo.
 
-| Tier | Features | Monetization |
-|------|----------|--------------|
-| Free (B2D) | Local memory extraction, MCP access, Dashboard | Open source |
-| Team (B2B) | Team style sync, shared project memory, analytics | Cloud subscription |
-
-Team features require cloud service for sync and management.
+| Feature | Approach |
+|---------|----------|
+| Core functionality | Local-first, MIT licensed |
+| Memory sync | User connects their own git repo |
+| Team sharing | Share repo access |
 
 **Consequences:**
-- (+) Clear monetization path
-- (+) Open source builds community
-- (+) Team features justify cloud service
-- (-) Need to build and maintain cloud infrastructure
-- (-) Must ensure free tier is genuinely useful
+- (+) Fully open source, no vendor lock-in
+- (+) Users control their data completely
+- (+) No cloud infrastructure to maintain
+- (-) Sync requires user to set up repo
 
 ---
 
@@ -561,7 +560,7 @@ New architecture:
 | ADR-002 | SQLite storage (still used, without sqlite-vec) |
 | ADR-006 | Nix/devenv for development |
 | ADR-007 | Spec-driven development |
-| ADR-013 | B2B focus with B2D open source |
+| ADR-013 | Open source with repo sync |
 | ADR-014 | Minimal CLI commands |
 | ADR-015 | Category-based organization (now tag-based, spirit preserved) |
 | ADR-017 | Doc awareness (git hooks, doc debt) |
@@ -575,6 +574,5 @@ New architecture:
 
 | Topic | Options | Blocking |
 |-------|---------|----------|
-| Team sync backend | Supabase / Custom / None | v2 |
-| Dashboard hosting | Local / Cloud / Hybrid | v2 |
-| Memory dedup strategy | Exact match / Semantic / AI | Cloud version |
+| Repo sync format | JSON / SQLite dump / Custom | Future |
+| Memory dedup strategy | Exact match / Semantic | Future |

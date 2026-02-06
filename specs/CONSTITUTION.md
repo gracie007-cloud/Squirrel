@@ -6,7 +6,7 @@ Project governance and principles for AI agents working on this codebase.
 
 - **Name**: Squirrel
 - **Purpose**: Local-first memory system for AI coding tools
-- **License**: AGPL-3.0
+- **License**: MIT
 
 ---
 
@@ -48,7 +48,7 @@ No daemon, no log watching, no background processing. Squirrel only runs when ca
 
 **All extraction happens locally. No central server required for core functionality.**
 
-Each developer's machine is the source of truth. Cloud features (team sync) are optional B2B add-ons.
+Each developer's machine is the source of truth. Future sync via user-connected git repo.
 
 ### P5: Doc Aware
 

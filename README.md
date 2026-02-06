@@ -79,6 +79,15 @@ cargo test
 cargo build
 ```
 
+## Roadmap
+
+| Feature | Status |
+|---------|--------|
+| Core MCP tools | Done |
+| Web config UI | Done |
+| Git hooks | Done |
+| Repo sync | Planned (sync memories via git repo) |
+
 ## License
 
-AGPL-3.0
+MIT
