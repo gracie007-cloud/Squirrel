@@ -118,7 +118,32 @@ Show help.
 
 ---
 
-### CLI-002: sqrl init
+### CLI-002: sqrl config
+
+Open web UI for global configuration.
+
+**Usage:**
+```bash
+sqrl config              # Open browser to localhost:3333
+sqrl config --no-open    # Start server without opening browser
+```
+
+**Actions:**
+1. Create `~/.sqrl/` if not exists
+2. Create `~/.sqrl/config.yaml` with defaults
+3. Create `~/.sqrl/mcps/` directory
+4. Start web server on `localhost:3333`
+5. Open browser (unless --no-open)
+
+**Web UI Features:**
+- Select enabled CLI tools (Claude Code, Git)
+- View/edit memories for any project
+- Upload/manage MCP config files
+- Black/white minimal theme
+
+---
+
+### CLI-003: sqrl init
 
 Initialize project for Squirrel. Silent operation, no prompts.
 
@@ -135,7 +160,7 @@ sqrl init
 5. If `.git/` exists: install pre-push hook
 6. Create `.claude/skills/squirrel-session/SKILL.md`
 7. Add Memory Protocol triggers to `.claude/CLAUDE.md`
-8. Register MCP server with enabled AI tools (e.g., `claude mcp add`)
+8. Run `sqrl apply` to register all MCPs from global config
 
 **Does NOT:**
 - Ask questions
@@ -144,7 +169,32 @@ sqrl init
 
 ---
 
-### CLI-003: sqrl goaway
+### CLI-004: sqrl apply
+
+Apply global MCP configs to current project.
+
+**Usage:**
+```bash
+sqrl apply
+```
+
+**Actions:**
+1. Read `~/.sqrl/config.yaml` for enabled tools
+2. For each enabled tool:
+   - Read MCP configs from `~/.sqrl/mcps/`
+   - Register with tool (e.g., `claude mcp add`)
+3. Print summary of applied configs
+
+**Example output:**
+```
+Applied MCP configs:
+  Claude Code: squirrel, other-mcp
+  Git: (hooks installed)
+```
+
+---
+
+### CLI-005: sqrl goaway
 
 Remove all Squirrel data from project.
 
@@ -159,7 +209,7 @@ sqrl goaway -f       # Skip confirmation (short form)
 1. Show what will be removed
 2. Prompt for confirmation (unless --force)
 3. Remove git hooks (pre-push)
-4. Unregister MCP server from enabled AI tools (e.g., `claude mcp remove`)
+4. Unregister MCP servers from enabled AI tools
 5. Remove `.claude/skills/squirrel-session/`
 6. Remove Memory Protocol triggers from `.claude/CLAUDE.md`
 7. Remove `.sqrl/` directory
@@ -168,10 +218,11 @@ sqrl goaway -f       # Skip confirmation (short form)
 - `.claude/` directory itself
 - User's other files
 - Git history
+- Global config (`~/.sqrl/`)
 
 ---
 
-### CLI-004: sqrl status
+### CLI-006: sqrl status
 
 Show Squirrel status for current project.
 
@@ -184,6 +235,10 @@ Squirrel Status
   Initialized: yes
   Memories: 12 total (5 preference, 4 project, 2 decision, 1 solution)
   Last activity: 2 hours ago
+
+Global Config: ~/.sqrl/
+  Enabled tools: Claude Code, Git
+  MCP configs: 2
 ```
 
 **Exit codes:**
@@ -194,7 +249,7 @@ Squirrel Status
 
 ---
 
-### CLI-005: sqrl mcp-serve
+### CLI-007: sqrl mcp-serve
 
 Start MCP server. Called by CLI tool configuration, not by user directly.
 
@@ -212,7 +267,7 @@ claude mcp add squirrel -- sqrl mcp-serve
 
 ---
 
-### CLI-006: sqrl _internal docguard-check
+### CLI-008: sqrl _internal docguard-check
 
 Hidden. Called by pre-push git hook.
 
@@ -306,18 +361,30 @@ You have access to Squirrel memory tools via MCP. Memories are **behavioral corr
 
 ---
 
-## Project Config Schema
+## Config Schemas
 
-### CONFIG-001: .sqrl/config.yaml
+### CONFIG-001: ~/.sqrl/config.yaml (Global)
+
+```yaml
+# Squirrel global configuration
+
+# CLI tools enabled (applied to all projects)
+tools:
+  claude_code: true
+  git: true
+  cursor: false
+  codex: false
+
+# Web UI settings
+ui:
+  port: 3333
+  open_browser: true
+```
+
+### CONFIG-002: .sqrl/config.yaml (Project)
 
 ```yaml
 # Squirrel project configuration
-
-# AI tools enabled for this project
-tools:
-  claude_code: true
-  cursor: false
-  codex: false
 
 # Documentation file settings
 docs:
@@ -329,6 +396,78 @@ docs:
 hooks:
   auto_install: true
 ```
+
+---
+
+## MCP Config Files
+
+### MCP-CONFIG-001: ~/.sqrl/mcps/*.json
+
+MCP config files that get applied to projects via `sqrl apply`.
+
+**Example: ~/.sqrl/mcps/squirrel.json**
+```json
+{
+  "name": "squirrel",
+  "command": "sqrl",
+  "args": ["mcp-serve"],
+  "scope": "project"
+}
+```
+
+**Example: ~/.sqrl/mcps/other-mcp.json**
+```json
+{
+  "name": "other-mcp",
+  "command": "/path/to/other-mcp",
+  "args": ["serve"],
+  "env": {
+    "API_KEY": "${OTHER_API_KEY}"
+  },
+  "scope": "user"
+}
+```
+
+**Fields:**
+| Field | Required | Description |
+|-------|----------|-------------|
+| name | Yes | MCP server name |
+| command | Yes | Executable path |
+| args | No | Command arguments |
+| env | No | Environment variables |
+| scope | No | "project" or "user" (default: "project") |
+
+---
+
+## Web API
+
+### API-001: Config Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/config` | Get global config |
+| POST | `/api/config` | Update global config |
+
+### API-002: MCP Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/mcps` | List all MCP configs |
+| GET | `/api/mcps/:name` | Get specific MCP config |
+| POST | `/api/mcps` | Upload new MCP config |
+| PUT | `/api/mcps/:name` | Update MCP config |
+| DELETE | `/api/mcps/:name` | Delete MCP config |
+
+### API-003: Memory Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/memories?project=<path>` | List memories for project |
+| POST | `/api/memories?project=<path>` | Add memory |
+| PUT | `/api/memories/:id?project=<path>` | Update memory |
+| DELETE | `/api/memories/:id?project=<path>` | Delete memory |
+
+**Request/Response formats:** JSON
 
 ---
 

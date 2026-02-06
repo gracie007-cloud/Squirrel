@@ -9,8 +9,9 @@ High-level system boundaries and data flow.
 | **CLI-Driven** | CLI AI decides what to remember, Squirrel just stores |
 | **Local-First** | All data stored locally, no cloud required |
 | **No AI in Squirrel** | Squirrel has zero LLM calls; all intelligence from CLI |
-| **Minimal** | 2 MCP tools, git hooks, SQLite. Nothing more. |
+| **Minimal** | 2 MCP tools, git hooks, SQLite, simple web UI |
 | **Doc Aware** | Pre-push hook shows changes for AI to review docs |
+| **Global + Project** | Global config at `~/.sqrl/`, project config at `.sqrl/` |
 
 ## System Overview
 
@@ -102,9 +103,35 @@ CLI tools (Claude Code, Cursor, etc.) are the intelligence layer.
 
 | File | Location | Contains |
 |------|----------|----------|
+| Global Config | `~/.sqrl/config.yaml` | Enabled tools, MCP configs |
+| Global MCPs | `~/.sqrl/mcps/` | MCP config files to apply to projects |
 | Project Memory DB | `<repo>/.sqrl/memory.db` | All memories |
-| Project Config | `<repo>/.sqrl/config.yaml` | Tools, docs, hook settings |
+| Project Config | `<repo>/.sqrl/config.yaml` | Project-specific overrides |
 | Skill File | `<repo>/.claude/skills/squirrel-session/SKILL.md` | Session start instructions |
+
+---
+
+### ARCH-004: Web UI
+
+Minimal black/white web UI for configuration. Runs locally on `localhost:3333`.
+
+| Endpoint | Purpose |
+|----------|---------|
+| `GET /` | Dashboard - view memories, config |
+| `GET /api/config` | Get global config |
+| `POST /api/config` | Update global config |
+| `GET /api/mcps` | List MCP configs |
+| `POST /api/mcps` | Upload MCP config |
+| `DELETE /api/mcps/:name` | Remove MCP config |
+| `GET /api/memories` | List project memories (requires project path) |
+| `POST /api/memories` | Add memory |
+| `PUT /api/memories/:id` | Update memory |
+| `DELETE /api/memories/:id` | Delete memory |
+
+**Technology:**
+- Embedded static assets (rust-embed)
+- axum for HTTP server
+- HTMX for interactivity (no JS framework)
 
 ---
 
@@ -213,7 +240,9 @@ Always informational, never blocks. AI makes the decision.
 | Command | Action |
 |---------|--------|
 | `sqrl` | Show help |
-| `sqrl init` | Initialize project (.sqrl/, hooks, skill, MCP registration) |
+| `sqrl config` | Open web UI for global configuration |
+| `sqrl init` | Initialize project + apply global MCP configs |
+| `sqrl apply` | Apply global MCP configs to current project |
 | `sqrl goaway` | Remove all Squirrel data (including MCP unregistration) |
 | `sqrl status` | Show project status |
 | `sqrl mcp-serve` | Start MCP server (called by CLI tool config) |
@@ -223,12 +252,23 @@ Always informational, never blocks. AI makes the decision.
 
 ---
 
-## Files Created by `sqrl init`
+## Files Created
+
+### Global (`sqrl config` first run)
+
+```
+~/.sqrl/
+├── config.yaml              # Enabled tools, settings
+└── mcps/                    # MCP configs to apply
+    └── squirrel.json        # Default Squirrel MCP
+```
+
+### Project (`sqrl init`)
 
 ```
 <repo>/
 ├── .sqrl/
-│   ├── config.yaml          # Tools, docs, hook settings
+│   ├── config.yaml          # Project-specific overrides
 │   └── memory.db            # SQLite (memories)
 ├── .claude/
 │   ├── CLAUDE.md            # Memory Protocol triggers (appended)
@@ -239,7 +279,7 @@ Always informational, never blocks. AI makes the decision.
     └── pre-push             # Diff summary for doc review
 ```
 
-Also registers MCP server with enabled AI tools (e.g., `claude mcp add squirrel`).
+`sqrl init` also runs `sqrl apply` to register all MCPs from global config.
 
 ---
 
@@ -251,6 +291,9 @@ Also registers MCP server with enabled AI tools (e.g., `claude mcp add squirrel`
 | Storage | SQLite | Local-first, single file |
 | MCP SDK | rmcp | Official Rust SDK |
 | CLI | clap | Minimal commands |
+| Web Server | axum | Lightweight, async |
+| Web UI | HTMX + Tailwind | Minimal JS, black/white theme |
+| Static Assets | rust-embed | Embedded in binary |
 | Build | cargo-dist | Single binary distribution |
 
 ---
@@ -295,7 +338,7 @@ Also registers MCP server with enabled AI tools (e.g., `claude mcp add squirrel`
 
 | Feature | When |
 |---------|------|
-| Dashboard (web UI) | v2 |
 | Memory deduplication AI | Cloud version |
 | Team sync | Cloud version |
 | Embedding search | v2 if needed |
+| More CLI tools (Cursor, Codex) | v1.1 |
