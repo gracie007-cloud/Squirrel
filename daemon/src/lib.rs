@@ -6,8 +6,11 @@
 pub mod cli;
 pub mod config;
 pub mod error;
+pub mod global_config;
 pub mod mcp;
 pub mod storage;
+pub mod web;
 
 pub use config::Config;
 pub use error::Error;
+pub use global_config::GlobalConfig;

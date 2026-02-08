@@ -37,5 +37,16 @@ rusqlite = { version = "0.31", features = ["bundled"] }
 glob = "0.3"
 regex = "1"
 
+# Web server
+axum = "0.7"
+tokio = { version = "1", features = ["full"] }
+tower-http = { version = "0.5", features = ["fs", "cors"] }
+rust-embed = "8"
+
+# Utilities
+dirs = "5"
+open = "5"
+mime_guess = "2"
+
 [dev-dependencies]
 tempfile = "3"

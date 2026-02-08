@@ -9,8 +9,9 @@ High-level system boundaries and data flow.
 | **CLI-Driven** | CLI AI decides what to remember, Squirrel just stores |
 | **Local-First** | All data stored locally, no cloud required |
 | **No AI in Squirrel** | Squirrel has zero LLM calls; all intelligence from CLI |
-| **Minimal** | 2 MCP tools, git hooks, SQLite. Nothing more. |
-| **Doc Aware** | Git hooks track doc debt, CLI fixes docs |
+| **Minimal** | 2 MCP tools, git hooks, SQLite, simple web UI |
+| **Doc Aware** | Pre-push hook shows changes for AI to review docs |
+| **Global + Project** | Global config at `~/.sqrl/`, project config at `.sqrl/` |
 
 ## System Overview
 
@@ -57,14 +58,13 @@ Single Rust binary. No persistent daemon. Started on-demand by CLI tools (MCP) o
 |--------|---------|
 | MCP Server | Serves `store_memory` + `get_memory` to CLI tools (rmcp) |
 | CLI Handler | `sqrl init`, `sqrl goaway`, `sqrl status` (clap) |
-| Git Hooks | Doc debt detection (post-commit, pre-push) |
-| SQLite Storage | Memories + doc debt storage |
+| Git Hooks | Pre-push diff display for doc review |
+| SQLite Storage | Memory storage |
 
 **Owns:**
 - SQLite read/write
 - use_count tracking
 - MCP protocol handling
-- Doc debt tracking
 - Git hook installation
 
 **Never Contains:**
@@ -88,7 +88,7 @@ CLI tools (Claude Code, Cursor, etc.) are the intelligence layer.
 **CLI is responsible for:**
 - Deciding what to remember
 - Deciding when to store
-- Updating docs when debt is reported
+- Updating docs when pre-push hook shows changes
 - Reviewing/applying user preferences
 
 **Squirrel is NOT responsible for:**
@@ -103,9 +103,36 @@ CLI tools (Claude Code, Cursor, etc.) are the intelligence layer.
 
 | File | Location | Contains |
 |------|----------|----------|
-| Project Memory DB | `<repo>/.sqrl/memory.db` | All memories + doc debt |
-| Project Config | `<repo>/.sqrl/config.yaml` | Doc patterns, hook settings |
+| Global Config | `~/.sqrl/config.yaml` | Enabled tools, enabled MCPs |
+| Global Preferences | `~/.sqrl/memory.db` | User preferences (apply everywhere) |
+| MCP Config File | `~/.sqrl/mcp-config.json` | Uploaded MCP definitions |
+| Project Memory DB | `<repo>/.sqrl/memory.db` | Project-specific memories |
+| Project Config | `<repo>/.sqrl/config.yaml` | Project settings |
 | Skill File | `<repo>/.claude/skills/squirrel-session/SKILL.md` | Session start instructions |
+
+---
+
+### ARCH-004: Web UI
+
+Minimal black/white web UI for configuration. Runs locally on `localhost:3333`.
+
+| Endpoint | Purpose |
+|----------|---------|
+| `GET /` | Dashboard - view memories, config |
+| `GET /api/config` | Get global config |
+| `POST /api/config` | Update global config |
+| `GET /api/mcps` | List MCP configs |
+| `POST /api/mcps` | Upload MCP config |
+| `DELETE /api/mcps/:name` | Remove MCP config |
+| `GET /api/memories` | List project memories (requires project path) |
+| `POST /api/memories` | Add memory |
+| `PUT /api/memories/:id` | Update memory |
+| `DELETE /api/memories/:id` | Delete memory |
+
+**Technology:**
+- Embedded static assets (rust-embed)
+- axum for HTTP server
+- HTMX for interactivity (no JS framework)
 
 ---
 
@@ -133,12 +160,10 @@ CLI needs project context (user asks, or session start skill)
 
 ### Memory Types
 
-| Type | Description | Examples |
-|------|-------------|---------|
-| `preference` | User's coding style preferences | "No emojis", "Use Gemini 3 Pro" |
-| `project` | Project-specific knowledge | "Use httpx not requests" |
-| `decision` | Architecture decisions | "Chose PostgreSQL for transactions" |
-| `solution` | Problem-solution pairs | "Fixed SSL by switching to httpx" |
+| Type | Storage | Description | Examples |
+|------|---------|-------------|---------|
+| `preference` | `~/.sqrl/memory.db` | Global user preferences | "No emojis", "Prefer async/await" |
+| `project` | `.sqrl/memory.db` | Project-specific rules | "Use httpx not requests" |
 
 ---
 
@@ -181,19 +206,21 @@ CLI needs project context (user asks, or session start skill)
 
 ---
 
-### FLOW-004: Doc Debt Detection
+### FLOW-004: Doc Review (Pre-Push)
 
 ```
-1. User commits code
-2. Git post-commit hook calls: sqrl _internal docguard-record
-3. Auto-resolve: if docs were updated in this commit, resolve matching old debt
-4. Squirrel analyzes commit diff:
-   a. Config mappings (.sqrl/config.yaml doc_rules.mappings)
-   b. Reference patterns (code contains SCHEMA-001 → SCHEMAS.md)
-5. If code changed but related docs didn't:
-   - Record doc debt entry in SQLite
-6. CLI sees debt via CLAUDE.md instructions or sqrl status
+1. User/AI pushes code
+2. Git pre-push hook calls: sqrl _internal docguard-check
+3. Squirrel prints:
+   - Commits to push (count)
+   - Files changed (diff stats)
+   - Doc files in repo
+4. AI reads output, decides if docs need updating
+5. If yes: AI updates docs, commits, push continues
+6. If no: push continues
 ```
+
+Always informational, never blocks. AI makes the decision.
 
 ---
 
@@ -201,10 +228,8 @@ CLI needs project context (user asks, or session start skill)
 
 ```
 1. sqrl init detects .git/ exists
-2. Installs hooks to .git/hooks/:
-   - post-commit: sqrl _internal docguard-record
-   - pre-push: sqrl _internal docguard-check
-3. Hooks are self-contained (no daemon required)
+2. Installs pre-push hook to .git/hooks/pre-push
+3. Hook is self-contained (no daemon required)
 ```
 
 ---
@@ -214,35 +239,46 @@ CLI needs project context (user asks, or session start skill)
 | Command | Action |
 |---------|--------|
 | `sqrl` | Show help |
-| `sqrl init` | Initialize project (.sqrl/, hooks, skill, MCP registration) |
+| `sqrl config` | Open web UI for global configuration |
+| `sqrl init` | Initialize project + apply global MCP configs |
+| `sqrl apply` | Apply global MCP configs to current project |
 | `sqrl goaway` | Remove all Squirrel data (including MCP unregistration) |
-| `sqrl status` | Show project status including doc debt |
+| `sqrl status` | Show project status |
 | `sqrl mcp-serve` | Start MCP server (called by CLI tool config) |
 
 **Hidden internal commands** (called by hooks):
-- `sqrl _internal docguard-record` - Record doc debt after commit
-- `sqrl _internal docguard-check` - Check doc debt before push
+- `sqrl _internal docguard-check` - Show diff summary before push
 
 ---
 
-## Files Created by `sqrl init`
+## Files Created
+
+### Global (`sqrl config` first run)
+
+```
+~/.sqrl/
+├── config.yaml              # Enabled tools, settings
+└── mcps/                    # MCP configs to apply
+    └── squirrel.json        # Default Squirrel MCP
+```
+
+### Project (`sqrl init`)
 
 ```
 <repo>/
 ├── .sqrl/
-│   ├── config.yaml          # Tools, doc mappings, hook settings
-│   └── memory.db            # SQLite (memories + doc debt)
+│   ├── config.yaml          # Project-specific overrides
+│   └── memory.db            # SQLite (memories)
 ├── .claude/
 │   ├── CLAUDE.md            # Memory Protocol triggers (appended)
 │   └── skills/
 │       └── squirrel-session/
 │           └── SKILL.md     # Session start skill
 └── .git/hooks/
-    ├── post-commit          # Doc debt recording
-    └── pre-push             # Doc debt check (optional block)
+    └── pre-push             # Diff summary for doc review
 ```
 
-Also registers MCP server with enabled AI tools (e.g., `claude mcp add squirrel`).
+`sqrl init` also runs `sqrl apply` to register all MCPs from global config.
 
 ---
 
@@ -254,6 +290,9 @@ Also registers MCP server with enabled AI tools (e.g., `claude mcp add squirrel`
 | Storage | SQLite | Local-first, single file |
 | MCP SDK | rmcp | Official Rust SDK |
 | CLI | clap | Minimal commands |
+| Web Server | axum | Lightweight, async |
+| Web UI | HTMX + Tailwind | Minimal JS, black/white theme |
+| Static Assets | rust-embed | Embedded in binary |
 | Build | cargo-dist | Single binary distribution |
 
 ---
@@ -294,11 +333,10 @@ Also registers MCP server with enabled AI tools (e.g., `claude mcp add squirrel`
 
 ---
 
-## Future (Not v1)
+## Future
 
-| Feature | When |
-|---------|------|
-| Dashboard (web UI) | v2 |
-| Memory deduplication AI | Cloud version |
-| Team sync | Cloud version |
-| Embedding search | v2 if needed |
+| Feature | Description |
+|---------|-------------|
+| Repo sync | Sync memories via user's git repo |
+| More CLI tools | Cursor, Codex support |
+| Embedding search | Semantic memory retrieval |

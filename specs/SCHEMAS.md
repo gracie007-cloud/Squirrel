@@ -1,95 +1,63 @@
 # Squirrel Schemas
 
-Database schema for project memories and doc debt. Single database per project.
+Database schemas for memories. Two databases: global and project.
 
 ---
 
-## Database File
+## Database Files
 
 | Database | Location | Purpose |
 |----------|----------|---------|
-| Project DB | `<repo>/.sqrl/memory.db` | Memories + doc debt |
+| Global DB | `~/.sqrl/memory.db` | User preferences (apply to all projects) |
+| Project DB | `<repo>/.sqrl/memory.db` | Project-specific memories |
 
 ---
 
 ## SCHEMA-001: memories
 
-All memories stored in a single table with type field.
+Same schema for both global and project databases.
 
 ```sql
 CREATE TABLE memories (
   id           TEXT PRIMARY KEY,          -- UUID
-  memory_type  TEXT NOT NULL,             -- 'preference' | 'project' | 'decision' | 'solution'
-  content      TEXT NOT NULL,             -- Memory content (1-2 sentences)
+  content      TEXT NOT NULL,             -- Actionable instruction (1-2 sentences)
   tags         TEXT DEFAULT '[]',         -- JSON array of tags
   use_count    INTEGER DEFAULT 1,         -- Times stored/reinforced
   created_at   TEXT NOT NULL,             -- ISO 8601
   updated_at   TEXT NOT NULL              -- ISO 8601
 );
 
-CREATE INDEX idx_memories_type ON memories(memory_type);
 CREATE INDEX idx_memories_use_count ON memories(use_count DESC);
 ```
 
-### Memory Types
+---
 
-Memories are behavioral corrections — things that change how the AI acts next time. Every memory should be an actionable instruction.
+## Memory Types
 
-| Type | When to store | Example |
-|------|---------------|---------|
-| `preference` | User corrects AI behavior | "Don't use emojis in code or commits" |
-| `project` | AI learns a project-specific rule | "Use httpx not requests in this project" |
-| `decision` | A choice constrains future behavior | "We chose SQLite, don't suggest Postgres" |
-| `solution` | AI hits an error and finds the fix | "SSL error with requests? Switch to httpx" |
+| Type | Storage | When to store | Example |
+|------|---------|---------------|---------|
+| `preference` | `~/.sqrl/memory.db` | User corrects AI behavior (applies everywhere) | "Don't use emojis in code or commits" |
+| `project` | `.sqrl/memory.db` | Project-specific rule | "Use httpx not requests in this project" |
 
-**Don't store:** research in progress, general knowledge, conversation context, anything that doesn't change AI behavior.
+**Don't store:** research in progress, general knowledge, conversation context.
 
 ### Examples
 
-| memory_type | content | tags | use_count |
-|-------------|---------|------|-----------|
-| preference | Don't use emojis in code or commits | ["style"] | 5 |
-| preference | Use Gemini 3 Pro, don't suggest Claude or older models | ["tooling", "llm"] | 3 |
-| project | Use httpx not requests in this project | ["backend", "http"] | 4 |
-| decision | We chose SQLite for local storage, don't suggest Postgres | ["database", "architecture"] | 2 |
-| solution | SSL error with requests? Switch to httpx | ["backend", "ssl", "fix"] | 1 |
+**Global preferences (~/.sqrl/memory.db):**
+| content | tags | use_count |
+|---------|------|-----------|
+| Don't use emojis in code or commits | ["style"] | 5 |
+| Prefer async/await over callbacks | ["style", "js"] | 3 |
 
----
-
-## SCHEMA-002: doc_debt
-
-Tracked documentation debt per commit.
-
-```sql
-CREATE TABLE doc_debt (
-  id              TEXT PRIMARY KEY,         -- UUID
-  commit_sha      TEXT NOT NULL,            -- Git commit SHA
-  commit_message  TEXT,                     -- First line of commit message
-  code_files      TEXT NOT NULL,            -- JSON array of changed code files
-  expected_docs   TEXT NOT NULL,            -- JSON array of docs that should update
-  detection_rule  TEXT NOT NULL,            -- 'config' | 'reference' | 'pattern'
-  resolved        INTEGER DEFAULT 0,        -- 1 if debt resolved
-  resolved_at     TEXT,                     -- ISO 8601 when resolved
-  created_at      TEXT NOT NULL             -- ISO 8601
-);
-
-CREATE INDEX idx_doc_debt_commit ON doc_debt(commit_sha);
-CREATE INDEX idx_doc_debt_resolved ON doc_debt(resolved);
-```
-
-### Detection Rules
-
-| Rule | Priority | Description |
-|------|----------|-------------|
-| config | 1 | User-defined mapping in .sqrl/config.yaml |
-| reference | 2 | Code contains spec ID (e.g., SCHEMA-001) |
-| pattern | 3 | File pattern match (e.g., *.rs → ARCHITECTURE.md) |
+**Project memories (.sqrl/memory.db):**
+| content | tags | use_count |
+|---------|------|-----------|
+| Use httpx not requests in this project | ["backend", "http"] | 4 |
+| PostgreSQL 16 for database | ["database"] | 2 |
 
 ---
 
 ## use_count Semantics
-
-The `use_count` field tracks how many times a memory has been stored or reinforced.
 
 | Event | Action |
 |-------|--------|
@@ -98,32 +66,3 @@ The `use_count` field tracks how many times a memory has been stored or reinforc
 | MCP get_memory returns memory | No change (read-only) |
 
 **Ordering:** Memories with higher use_count appear first in MCP responses.
-
----
-
-## What Was Removed (ADR-021)
-
-| Old Schema | Status | Reason |
-|------------|--------|--------|
-| SCHEMA-001: user_styles | Merged | Now `memories` with type "preference" |
-| SCHEMA-002: project_memories | Merged | Now `memories` with type "project" |
-| SCHEMA-003: categories | Removed | Tags replace categories |
-| SCHEMA-004: extraction_log | Removed | No extraction pipeline |
-| SCHEMA-005: docs_index | Removed | No LLM doc summaries |
-| Team schemas | Deferred | Future cloud version |
-
----
-
-## Migration Notes
-
-### From Old Schema
-
-If migrating from the previous multi-table schema:
-
-| Old Table | Action |
-|-----------|--------|
-| `user_styles` | Move to `memories` with type "preference" |
-| `project_memories` | Move to `memories` with type "project" |
-| `categories` | Convert category to tags |
-| `extraction_log` | Drop |
-| `docs_index` | Drop |

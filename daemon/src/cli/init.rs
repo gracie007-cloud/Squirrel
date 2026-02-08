@@ -39,7 +39,7 @@ pub fn run() -> Result<(), Error> {
 
     // Install git hooks if git exists
     if config.hooks.auto_install && hooks::has_git(&project_root) {
-        if let Err(e) = hooks::install_hooks(&project_root, config.hooks.pre_push_block) {
+        if let Err(e) = hooks::install_hooks(&project_root, false) {
             warn!(error = %e, "Failed to install git hooks");
         } else {
             println!("Git hooks installed.");
@@ -52,13 +52,16 @@ pub fn run() -> Result<(), Error> {
     // Add memory triggers to CLAUDE.md
     add_memory_triggers(&project_root)?;
 
-    // Register MCP server with enabled tools
-    register_mcp_servers(&config)?;
+    // Apply global MCP configs
+    println!();
+    crate::cli::apply::run()?;
 
+    println!();
     println!("Squirrel initialized.");
     println!();
     println!("Next steps:");
     println!("  Check status: sqrl status");
+    println!("  Configure: sqrl config");
 
     Ok(())
 }
@@ -73,15 +76,14 @@ fn create_skill_file(project_root: &Path) -> Result<(), Error> {
 
     let skill_content = r#"---
 name: squirrel-session
-description: Load user preferences and project context from Squirrel memory at session start. Use when starting a new coding session.
+description: Load behavioral corrections from Squirrel memory at session start. Use when starting a new coding session.
 user-invocable: false
 ---
 
-At the start of this session, load context from Squirrel:
+At the start of this session, load corrections from Squirrel:
 
-1. Call `squirrel_get_memory` with type "preference" to get user preferences.
-2. Apply these preferences throughout the session.
-3. If doc debt exists (check via `sqrl status` output in project), note which docs may need updates.
+1. Call `squirrel_get_memory` to get all behavioral corrections.
+2. Apply these corrections throughout the session.
 "#;
 
     let skill_path = skill_dir.join("SKILL.md");
@@ -103,29 +105,21 @@ fn add_memory_triggers(project_root: &Path) -> Result<(), Error> {
 <!-- START Squirrel Memory Protocol -->
 ## Squirrel Memory Protocol
 
-You have access to Squirrel memory tools via MCP. Memories are **behavioral corrections** — things that change how you act next time.
+You have access to Squirrel memory tools via MCP.
 
 ### When to store (squirrel_store_memory):
-- User corrects your behavior → type: "preference" (e.g., "Don't use emojis in commits")
-- You learn a project-specific rule → type: "project" (e.g., "Use httpx not requests here")
-- A choice is made that constrains future work → type: "decision" (e.g., "We chose SQLite, don't suggest Postgres")
-- You hit an error and find the fix → type: "solution" (e.g., "SSL error with requests? Switch to httpx")
+- User corrects your behavior → type: "preference" (global, applies everywhere)
+- You learn a project-specific rule → type: "project" (only this project)
 
 ### When NOT to store:
-- Research in progress (no decision made yet)
-- General knowledge (not project-specific)
-- Conversation context (already in chat history)
-- Anything that doesn't change your future behavior
-
-### When to retrieve (squirrel_get_memory):
-- At session start (via squirrel-session skill)
-- Before making choices the user may have corrected before
+- Research in progress
+- General knowledge
+- Conversation context
 
 ### Rules:
-- Store corrections proactively when the user corrects you. Don't ask permission.
-- Every memory should be an actionable instruction: "Do X" or "Don't do Y" or "When Z, do W".
-- Keep content concise (1-2 sentences).
-- Always include relevant tags.
+- Store corrections proactively. Don't ask permission.
+- Every memory: "Do X" or "Don't do Y" or "When Z, do W"
+- Keep concise (1-2 sentences)
 <!-- END Squirrel Memory Protocol -->
 "#;
 
@@ -147,60 +141,6 @@ You have access to Squirrel memory tools via MCP. Memories are **behavioral corr
 
     info!("Added memory triggers to CLAUDE.md");
     println!("Memory triggers added to CLAUDE.md.");
-
-    Ok(())
-}
-
-/// Register Squirrel as an MCP server with enabled AI tools.
-fn register_mcp_servers(config: &Config) -> Result<(), Error> {
-    let sqrl_bin = std::env::current_exe()?
-        .canonicalize()
-        .unwrap_or_else(|_| std::env::current_exe().unwrap());
-
-    if config.tools.claude_code {
-        register_claude_code_mcp(&sqrl_bin)?;
-    }
-
-    // Future: cursor, codex registration
-
-    Ok(())
-}
-
-/// Register with Claude Code via `claude mcp add`.
-fn register_claude_code_mcp(sqrl_bin: &Path) -> Result<(), Error> {
-    use std::process::Command;
-
-    // Check if claude CLI exists
-    let which = Command::new("which").arg("claude").output();
-    if which.is_err() || !which.unwrap().status.success() {
-        warn!("Claude Code CLI not found, skipping MCP registration");
-        return Ok(());
-    }
-
-    let output = Command::new("claude")
-        .args([
-            "mcp",
-            "add",
-            "squirrel",
-            "-s",
-            "project",
-            "--",
-            sqrl_bin.to_str().unwrap(),
-            "mcp-serve",
-        ])
-        .output()?;
-
-    if output.status.success() {
-        info!("Registered MCP server with Claude Code");
-        println!("MCP server registered with Claude Code.");
-    } else {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        warn!(stderr = %stderr, "Failed to register MCP server with Claude Code");
-        println!(
-            "Could not auto-register MCP server. Run manually:\n  claude mcp add squirrel -- {} mcp-serve",
-            sqrl_bin.display()
-        );
-    }
 
     Ok(())
 }

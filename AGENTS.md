@@ -77,42 +77,26 @@ devenv shell
 - Only change what's necessary (DR5)
 - Write tests for new features (DR4)
 
-## Doc Debt Awareness
+## Doc Review
 
-Squirrel auto-installs git hooks that track doc debt. After each commit, check `sqrl status` to see if docs need updates.
-
-| Files Changed | Check These Docs |
-|---------------|------------------|
-| `*.rs` (Rust) | `specs/ARCHITECTURE.md`, `specs/INTERFACES.md`, `specs/SCHEMAS.md` |
-| `specs/*.md` | Related code that implements the spec |
-| `*.toml`, `*.nix` | `specs/DECISIONS.md` (if config change is significant) |
-
-When doc debt is detected, update the related docs before pushing.
+When you push, Squirrel's pre-push hook shows you what files changed and lists doc files in the repo. Review the changes and decide if any docs need updating. Update them before the push completes.
 
 <!-- START Squirrel Memory Protocol -->
 ## Squirrel Memory Protocol
 
-You have access to Squirrel memory tools via MCP. Memories are **behavioral corrections** — things that change how you act next time.
+You have access to Squirrel memory tools via MCP.
 
 ### When to store (squirrel_store_memory):
-- User corrects your behavior → type: "preference" (e.g., "Don't use emojis in commits")
-- You learn a project-specific rule → type: "project" (e.g., "Use httpx not requests here")
-- A choice is made that constrains future work → type: "decision" (e.g., "We chose SQLite, don't suggest Postgres")
-- You hit an error and find the fix → type: "solution" (e.g., "SSL error with requests? Switch to httpx")
+- User corrects your behavior → type: "preference" (global, applies everywhere)
+- You learn a project-specific rule → type: "project" (only this project)
 
 ### When NOT to store:
-- Research in progress (no decision made yet)
-- General knowledge (not project-specific)
-- Conversation context (already in chat history)
-- Anything that doesn't change your future behavior
-
-### When to retrieve (squirrel_get_memory):
-- At session start (via squirrel-session skill)
-- Before making choices the user may have corrected before
+- Research in progress
+- General knowledge
+- Conversation context
 
 ### Rules:
-- Store corrections proactively when the user corrects you. Don't ask permission.
-- Every memory should be an actionable instruction: "Do X" or "Don't do Y" or "When Z, do W".
-- Keep content concise (1-2 sentences).
-- Always include relevant tags.
+- Store corrections proactively. Don't ask permission.
+- Every memory: "Do X" or "Don't do Y" or "When Z, do W"
+- Keep concise (1-2 sentences)
 <!-- END Squirrel Memory Protocol -->

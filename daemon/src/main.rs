@@ -8,10 +8,13 @@ use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 mod cli;
 mod config;
 mod error;
+mod global_config;
 mod mcp;
 mod storage;
+mod web;
 
 pub use error::Error;
+pub use global_config::GlobalConfig;
 
 #[derive(Parser)]
 #[command(name = "sqrl")]
@@ -24,8 +27,18 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Open web UI for global configuration
+    Config {
+        /// Don't open browser automatically
+        #[arg(long)]
+        no_open: bool,
+    },
+
     /// Initialize Squirrel for this project
     Init,
+
+    /// Apply global MCP configs to current project
+    Apply,
 
     /// Remove all Squirrel data from this project
     Goaway {
@@ -51,11 +64,7 @@ enum Commands {
 
 #[derive(Subcommand)]
 enum InternalCommands {
-    /// Record doc debt after commit (post-commit hook)
-    #[command(name = "docguard-record")]
-    DocguardRecord,
-
-    /// Check doc debt before push (pre-push hook)
+    /// Show diff summary before push (pre-push hook)
     #[command(name = "docguard-check")]
     DocguardCheck,
 }
@@ -75,8 +84,20 @@ fn main() -> Result<(), Error> {
             Cli::command().print_help().unwrap();
             println!();
         }
+        Some(Commands::Config { no_open }) => {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            rt.block_on(async {
+                if let Err(e) = web::serve(!no_open).await {
+                    eprintln!("Error: {}", e);
+                    std::process::exit(1);
+                }
+            });
+        }
         Some(Commands::Init) => {
             cli::init::run()?;
+        }
+        Some(Commands::Apply) => {
+            cli::apply::run()?;
         }
         Some(Commands::Goaway { force }) => {
             cli::goaway::run(force)?;
@@ -91,9 +112,6 @@ fn main() -> Result<(), Error> {
             mcp::run()?;
         }
         Some(Commands::Internal { cmd }) => match cmd {
-            InternalCommands::DocguardRecord => {
-                cli::internal::docguard_record()?;
-            }
             InternalCommands::DocguardCheck => {
                 if !cli::internal::docguard_check()? {
                     std::process::exit(1);

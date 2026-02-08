@@ -1,7 +1,6 @@
-//! SQLite storage for memories and doc debt.
+//! SQLite storage for memories.
 //!
 //! SCHEMA-001: memories in <repo>/.sqrl/memory.db
-//! SCHEMA-002: doc_debt in <repo>/.sqrl/memory.db
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -18,9 +17,179 @@ fn db_path(project_root: &Path) -> PathBuf {
     project_root.join(".sqrl").join("memory.db")
 }
 
+// === Storage struct for web API ===
+
+/// Storage handle for a project database.
+pub struct Storage {
+    conn: Connection,
+}
+
+impl Storage {
+    /// Open a storage connection to a database file.
+    pub fn open(path: &Path) -> Result<Self, Error> {
+        let conn = Connection::open(path)?;
+        ensure_memories_table(&conn)?;
+        Ok(Self { conn })
+    }
+
+    /// List all memories.
+    pub fn list_all_memories(&self) -> Result<Vec<Memory>, Error> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, memory_type, content, tags, use_count, created_at, updated_at
+             FROM memories ORDER BY use_count DESC",
+        )?;
+
+        let rows = stmt.query_map([], |row| {
+            let tags_json: String = row.get(3)?;
+            Ok(Memory {
+                id: row.get(0)?,
+                memory_type: row.get(1)?,
+                content: row.get(2)?,
+                tags: serde_json::from_str(&tags_json).unwrap_or_default(),
+                use_count: row.get(4)?,
+                created_at: row.get(5)?,
+                updated_at: row.get(6)?,
+            })
+        })?;
+
+        let mut memories = Vec::new();
+        for row in rows {
+            memories.push(row?);
+        }
+        Ok(memories)
+    }
+
+    /// Get a specific memory by ID.
+    pub fn get_memory(&self, id: &str) -> Result<Option<Memory>, Error> {
+        let result = self.conn.query_row(
+            "SELECT id, memory_type, content, tags, use_count, created_at, updated_at
+             FROM memories WHERE id = ?1",
+            [id],
+            |row| {
+                let tags_json: String = row.get(3)?;
+                Ok(Memory {
+                    id: row.get(0)?,
+                    memory_type: row.get(1)?,
+                    content: row.get(2)?,
+                    tags: serde_json::from_str(&tags_json).unwrap_or_default(),
+                    use_count: row.get(4)?,
+                    created_at: row.get(5)?,
+                    updated_at: row.get(6)?,
+                })
+            },
+        );
+
+        match result {
+            Ok(memory) => Ok(Some(memory)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Store a new memory.
+    pub fn store_memory(
+        &self,
+        memory_type: &str,
+        content: &str,
+        tags: &[String],
+    ) -> Result<StoreResult, Error> {
+        // Check for existing memory with same content
+        let existing: Option<(String, i64)> = self
+            .conn
+            .query_row(
+                "SELECT id, use_count FROM memories WHERE content = ?1",
+                [content],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .ok();
+
+        if let Some((id, use_count)) = existing {
+            let new_count = use_count + 1;
+            let now = chrono::Utc::now().to_rfc3339();
+            self.conn.execute(
+                "UPDATE memories SET use_count = ?1, updated_at = ?2 WHERE id = ?3",
+                rusqlite::params![new_count, now, id],
+            )?;
+            Ok(StoreResult {
+                stored: true,
+                id,
+                deduplicated: true,
+                use_count: new_count,
+            })
+        } else {
+            let id = uuid::Uuid::new_v4().to_string();
+            let now = chrono::Utc::now().to_rfc3339();
+            let tags_json = serde_json::to_string(tags)?;
+
+            self.conn.execute(
+                "INSERT INTO memories (id, memory_type, content, tags, use_count, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, 1, ?5, ?6)",
+                rusqlite::params![id, memory_type, content, tags_json, now, now],
+            )?;
+            Ok(StoreResult {
+                stored: true,
+                id,
+                deduplicated: false,
+                use_count: 1,
+            })
+        }
+    }
+
+    /// Update an existing memory.
+    pub fn update_memory(
+        &self,
+        id: &str,
+        memory_type: Option<&str>,
+        content: Option<&str>,
+        tags: Option<&[String]>,
+    ) -> Result<(), Error> {
+        let now = chrono::Utc::now().to_rfc3339();
+
+        if let Some(mt) = memory_type {
+            self.conn.execute(
+                "UPDATE memories SET memory_type = ?1, updated_at = ?2 WHERE id = ?3",
+                rusqlite::params![mt, now, id],
+            )?;
+        }
+
+        if let Some(c) = content {
+            self.conn.execute(
+                "UPDATE memories SET content = ?1, updated_at = ?2 WHERE id = ?3",
+                rusqlite::params![c, now, id],
+            )?;
+        }
+
+        if let Some(t) = tags {
+            let tags_json = serde_json::to_string(t)?;
+            self.conn.execute(
+                "UPDATE memories SET tags = ?1, updated_at = ?2 WHERE id = ?3",
+                rusqlite::params![tags_json, now, id],
+            )?;
+        }
+
+        Ok(())
+    }
+
+    /// Delete a memory by ID.
+    pub fn delete_memory(&self, id: &str) -> Result<(), Error> {
+        self.conn
+            .execute("DELETE FROM memories WHERE id = ?1", [id])?;
+        Ok(())
+    }
+}
+
+/// Result of storing a memory.
+#[derive(Debug, Clone, Serialize)]
+pub struct StoreResult {
+    pub stored: bool,
+    pub id: String,
+    pub deduplicated: bool,
+    pub use_count: i64,
+}
+
 // === Memory (SCHEMA-001) ===
 
-/// A stored memory.
+/// A stored memory (behavioral correction).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Memory {
     pub id: String,
@@ -255,199 +424,6 @@ pub fn get_memory_counts(
     }
 
     Ok(counts)
-}
-
-// === Doc Debt (SCHEMA-002) ===
-
-/// Doc debt entry.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DocDebt {
-    pub id: String,
-    pub commit_sha: String,
-    pub commit_message: Option<String>,
-    pub code_files: Vec<String>,
-    pub expected_docs: Vec<String>,
-    pub detection_rule: String,
-    pub resolved: bool,
-    pub resolved_at: Option<String>,
-    pub created_at: String,
-}
-
-/// Ensure doc_debt table exists.
-fn ensure_doc_debt_table(conn: &Connection) -> SqliteResult<()> {
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS doc_debt (
-            id              TEXT PRIMARY KEY,
-            commit_sha      TEXT NOT NULL,
-            commit_message  TEXT,
-            code_files      TEXT NOT NULL,
-            expected_docs   TEXT NOT NULL,
-            detection_rule  TEXT NOT NULL,
-            resolved        INTEGER DEFAULT 0,
-            resolved_at     TEXT,
-            created_at      TEXT NOT NULL
-        )",
-        [],
-    )?;
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_doc_debt_commit ON doc_debt(commit_sha)",
-        [],
-    )?;
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_doc_debt_resolved ON doc_debt(resolved)",
-        [],
-    )?;
-    Ok(())
-}
-
-/// Add a doc debt entry.
-pub fn add_doc_debt(
-    project_root: &Path,
-    commit_sha: &str,
-    commit_message: Option<&str>,
-    code_files: &[String],
-    expected_docs: &[String],
-    detection_rule: &str,
-) -> Result<String, Error> {
-    let path = db_path(project_root);
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-
-    let conn = Connection::open(&path)?;
-    ensure_doc_debt_table(&conn)?;
-
-    let id = uuid::Uuid::new_v4().to_string();
-    let code_files_json = serde_json::to_string(code_files)?;
-    let expected_docs_json = serde_json::to_string(expected_docs)?;
-    let created_at = chrono::Utc::now().to_rfc3339();
-
-    conn.execute(
-        "INSERT INTO doc_debt (id, commit_sha, commit_message, code_files, expected_docs, detection_rule, resolved, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, ?7)",
-        rusqlite::params![id, commit_sha, commit_message, code_files_json, expected_docs_json, detection_rule, created_at],
-    )?;
-
-    Ok(id)
-}
-
-/// Get unresolved doc debt.
-pub fn get_unresolved_doc_debt(project_root: &Path) -> Result<Vec<DocDebt>, Error> {
-    let path = db_path(project_root);
-    if !path.exists() {
-        return Ok(vec![]);
-    }
-
-    let conn = Connection::open(&path)?;
-
-    let table_exists: i32 = conn.query_row(
-        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='doc_debt'",
-        [],
-        |row| row.get(0),
-    )?;
-    if table_exists == 0 {
-        return Ok(vec![]);
-    }
-
-    let mut stmt = conn.prepare(
-        "SELECT id, commit_sha, commit_message, code_files, expected_docs, detection_rule, resolved, resolved_at, created_at
-         FROM doc_debt WHERE resolved = 0 ORDER BY created_at DESC",
-    )?;
-
-    let debts = stmt
-        .query_map([], |row| {
-            let code_files_json: String = row.get(3)?;
-            let expected_docs_json: String = row.get(4)?;
-            let resolved_int: i32 = row.get(6)?;
-
-            Ok(DocDebt {
-                id: row.get(0)?,
-                commit_sha: row.get(1)?,
-                commit_message: row.get(2)?,
-                code_files: serde_json::from_str(&code_files_json).unwrap_or_default(),
-                expected_docs: serde_json::from_str(&expected_docs_json).unwrap_or_default(),
-                detection_rule: row.get(5)?,
-                resolved: resolved_int != 0,
-                resolved_at: row.get(7)?,
-                created_at: row.get(8)?,
-            })
-        })?
-        .collect::<SqliteResult<Vec<_>>>()?;
-
-    Ok(debts)
-}
-
-/// Resolve doc debt entries where expected docs were updated.
-pub fn resolve_doc_debt_by_docs(
-    project_root: &Path,
-    updated_docs: &[String],
-) -> Result<usize, Error> {
-    let path = db_path(project_root);
-    if !path.exists() {
-        return Ok(0);
-    }
-
-    let conn = Connection::open(&path)?;
-
-    let table_exists: i32 = conn.query_row(
-        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='doc_debt'",
-        [],
-        |row| row.get(0),
-    )?;
-    if table_exists == 0 {
-        return Ok(0);
-    }
-
-    let now = chrono::Utc::now().to_rfc3339();
-    let mut resolved_count = 0;
-
-    // Get all unresolved debt
-    let mut stmt = conn.prepare("SELECT id, expected_docs FROM doc_debt WHERE resolved = 0")?;
-
-    let debts: Vec<(String, String)> = stmt
-        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
-        .collect::<SqliteResult<Vec<_>>>()?;
-
-    for (id, expected_docs_json) in &debts {
-        let expected: Vec<String> = serde_json::from_str(expected_docs_json).unwrap_or_default();
-        // If any expected doc was updated, resolve the debt
-        if expected.iter().any(|doc| updated_docs.contains(doc)) {
-            conn.execute(
-                "UPDATE doc_debt SET resolved = 1, resolved_at = ?1 WHERE id = ?2",
-                rusqlite::params![now, id],
-            )?;
-            resolved_count += 1;
-        }
-    }
-
-    Ok(resolved_count)
-}
-
-/// Check if doc debt exists for a commit.
-pub fn has_doc_debt_for_commit(project_root: &Path, commit_sha: &str) -> Result<bool, Error> {
-    let path = db_path(project_root);
-    if !path.exists() {
-        return Ok(false);
-    }
-
-    let conn = Connection::open(&path)?;
-
-    let table_exists: i32 = conn.query_row(
-        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='doc_debt'",
-        [],
-        |row| row.get(0),
-    )?;
-    if table_exists == 0 {
-        return Ok(false);
-    }
-
-    let count: i32 = conn.query_row(
-        "SELECT COUNT(*) FROM doc_debt WHERE commit_sha = ?1",
-        [commit_sha],
-        |row| row.get(0),
-    )?;
-
-    Ok(count > 0)
 }
 
 #[cfg(test)]
